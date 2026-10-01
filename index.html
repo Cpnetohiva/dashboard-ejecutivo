@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="es-MX">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard Ejecutivo · EVE Control</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root{--navy:#001D3D;--navy2:#003566;--gold:#FFC300;--bg:#F3F5F9;--card:#fff;--txt:#1b2433;--mut:#6b778c;--ok:#1a9a5b;--warn:#e69500;--bad:#d64545;--line:#e3e8f0}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'DM Sans',system-ui,sans-serif;background:var(--bg);color:var(--txt);font-size:15px}
+.mono{font-family:'JetBrains Mono',monospace}
+header{background:var(--navy);color:#fff;padding:14px 20px;position:sticky;top:0;z-index:20;border-bottom:3px solid var(--gold)}
+.hrow{display:flex;gap:14px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+h1{font-size:19px;letter-spacing:.3px}h1 span{color:var(--gold)}
+.sub{font-size:12px;color:#b9c6da}
+select,input,button{font-family:inherit;font-size:14px}
+select,input[type=text],input[type=password],input[type=date],input[type=number],textarea{padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--txt)}
+.btn{background:var(--gold);color:var(--navy);border:0;padding:9px 16px;border-radius:8px;font-weight:700;cursor:pointer}
+.btn.ghost{background:transparent;color:#fff;border:1px solid #4a6288}
+.btn.dark{background:var(--navy);color:#fff}
+nav{display:flex;gap:6px;overflow-x:auto;padding:10px 20px;background:#fff;border-bottom:1px solid var(--line);position:sticky;top:67px;z-index:15}
+nav button{border:0;background:transparent;padding:9px 14px;border-radius:20px;font-weight:700;color:var(--mut);cursor:pointer;white-space:nowrap}
+nav button.on{background:var(--navy);color:var(--gold)}
+main{max-width:1200px;margin:0 auto;padding:18px 16px 60px}
+.panel{display:none}.panel.on{display:block}
+.grid{display:grid;gap:14px}
+.g4{grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+.g2{grid-template-columns:repeat(auto-fit,minmax(340px,1fr))}
+.card{background:var(--card);border-radius:14px;padding:16px 18px;box-shadow:0 1px 3px rgba(0,29,61,.08)}
+.kpi .lbl{font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.6px;font-weight:700}
+.kpi .val{font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:700;color:var(--navy);margin:6px 0 2px}
+.kpi .hint{font-size:12.5px;color:var(--mut)}
+.kpi.gold{border-left:5px solid var(--gold)}.kpi.ok{border-left:5px solid var(--ok)}.kpi.bad{border-left:5px solid var(--bad)}.kpi.warn{border-left:5px solid var(--warn)}.kpi.blue{border-left:5px solid var(--navy2)}
+h2{font-size:17px;color:var(--navy);margin:22px 0 10px}
+h3{font-size:14.5px;color:var(--navy);margin-bottom:10px}
+.lectura{background:#fff8e0;border:1px solid #ffe08a;border-radius:12px;padding:12px 16px;margin-bottom:14px;line-height:1.5}
+.lectura b{color:var(--navy)}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{text-align:left;font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--mut);padding:8px 8px;border-bottom:2px solid var(--line)}
+td{padding:9px 8px;border-bottom:1px solid var(--line)}
+td.n,th.n{text-align:right;font-family:'JetBrains Mono',monospace;white-space:nowrap}
+tr.tot td{font-weight:700;background:#f7f9fc;border-top:2px solid var(--navy)}
+.bar{height:8px;border-radius:5px;background:#e9eef6;min-width:60px;overflow:hidden}.bar i{display:block;height:100%;background:var(--navy2)}
+.bar.g i{background:var(--gold)}
+.neg{color:var(--bad)}.pos{color:var(--ok)}
+.note{font-size:12.5px;color:var(--mut);margin-top:8px;line-height:1.45}
+.tabs2{display:inline-flex;background:#e9eef6;border-radius:20px;padding:3px;margin-bottom:12px}
+.tabs2 button{border:0;background:transparent;padding:7px 14px;border-radius:18px;font-weight:700;color:var(--mut);cursor:pointer}
+.tabs2 button.on{background:var(--navy);color:var(--gold)}
+details{border-bottom:1px solid var(--line)}summary{cursor:pointer;padding:11px 6px;display:flex;justify-content:space-between;gap:10px;font-weight:700;list-style:none}
+summary::-webkit-details-marker{display:none}summary:before{content:'▸ ';color:var(--gold)}details[open] summary:before{content:'▾ '}
+details table{margin:0 0 10px 18px;width:calc(100% - 18px)}
+.chartbox{position:relative;height:300px}
+.gauge{height:26px;border-radius:14px;background:#e9eef6;overflow:hidden;position:relative;margin:10px 0}
+.gauge i{display:block;height:100%;transition:width .5s}
+.gauge span{position:absolute;left:0;right:0;top:0;text-align:center;line-height:26px;font-weight:700;font-size:13px;color:#001D3D;mix-blend-mode:normal}
+.pill{display:inline-block;padding:2px 9px;border-radius:12px;font-size:12px;font-weight:700}
+.pill.ok{background:#dff5e9;color:var(--ok)}.pill.warn{background:#fff0d1;color:var(--warn)}.pill.bad{background:#fbe0e0;color:var(--bad)}
+#login{max-width:460px;margin:7vh auto;padding:0 16px}
+#login .card{padding:26px}
+#login h1{color:var(--navy);margin-bottom:4px}
+#login label{display:block;font-size:12px;font-weight:700;color:var(--mut);margin:12px 0 4px;text-transform:uppercase}
+#login input,#login textarea{width:100%}
+#login .row{display:flex;gap:8px;margin-top:16px}
+.err{color:var(--bad);font-size:13px;margin-top:10px}
+.warnbar{background:#fff0d1;border:1px solid #f3cf7c;color:#7a5200;border-radius:10px;padding:9px 14px;margin-bottom:12px;font-size:13px}
+.rango{display:none;gap:6px;align-items:center}
+.pe-in{display:flex;gap:16px;flex-wrap:wrap;align-items:end}
+.pe-in label{font-size:12px;font-weight:700;color:var(--mut);display:block;margin-bottom:4px;text-transform:uppercase}
+@media(max-width:640px){.kpi .val{font-size:22px}nav{top:92px}}
+@media print{header .btn,nav,.noprint{display:none}header,nav{position:static}.panel{display:block!important;page-break-inside:avoid}}
+</style>
+</head>
+<body>
+
+<!-- ================= LOGIN / CONFIG ================= -->
+<div id="login">
+  <div class="card">
+    <h1>EVE <span style="color:#c99700">Control</span> · Dashboard Ejecutivo</h1>
+    <div class="sub" style="color:#6b778c">Solo lectura. No modifica ningún dato.</div>
+
+    <div id="cfgBox" style="display:none">
+      <label>Configuración de Firebase (copia el objeto firebaseConfig de js/config.js)</label>
+      <textarea id="cfgText" rows="7" placeholder='{ apiKey: "...", authDomain: "...", projectId: "everplastic", ... }'></textarea>
+      <div class="note">Se guarda solo en este navegador.</div>
+    </div>
+
+    <div id="userBox">
+      <label>Usuario</label><input type="text" id="usr" placeholder="Admin" autocomplete="username">
+      <label>Contraseña</label><input type="password" id="pwd" autocomplete="current-password">
+    </div>
+    <div class="row">
+      <button class="btn dark" id="btnLogin" style="flex:1">Entrar</button>
+      <button class="btn" id="btnDemo" style="flex:1">Ver demo</button>
+    </div>
+    <div class="note"><a href="#" id="lnkCfg">Cambiar configuración de Firebase</a></div>
+    <div class="err" id="loginErr"></div>
+  </div>
+</div>
+
+<!-- ================= APP ================= -->
+<div id="app" style="display:none">
+<header>
+  <div class="hrow">
+    <div>
+      <h1>EVE <span>Control</span> · Dashboard Ejecutivo</h1>
+      <div class="sub" id="subTitle">—</div>
+    </div>
+    <div class="hrow noprint" style="gap:8px">
+      <select id="selPeriodo">
+        <option value="mes">Este mes</option>
+        <option value="mesant">Mes anterior</option>
+        <option value="90">Últimos 90 días</option>
+        <option value="anio">Este año</option>
+        <option value="todo">Todo el histórico</option>
+        <option value="rango">Rango de fechas…</option>
+      </select>
+      <span class="rango" id="rangoBox"><input type="date" id="fDesde"><input type="date" id="fHasta"></span>
+      <button class="btn ghost" id="btnRef">↻ Actualizar</button>
+      <button class="btn ghost" onclick="window.print()">🖨 Imprimir</button>
+      <button class="btn ghost" id="btnSalir">Salir</button>
+    </div>
+  </div>
+</header>
+<nav id="nav">
+  <button data-p="resumen" class="on">📊 Resumen</button>
+  <button data-p="materiales">♻️ Materiales</button>
+  <button data-p="ventas">💰 Ventas</button>
+  <button data-p="inventario">📦 Inventario</button>
+  <button data-p="cxp">🏭 Por pagar (CxP)</button>
+  <button data-p="cxc">🤝 Por cobrar (CxC)</button>
+  <button data-p="pe">⚖️ Punto de equilibrio</button>
+</nav>
+<main>
+  <div id="warns"></div>
+  <section class="panel on" id="p-resumen"></section>
+  <section class="panel" id="p-materiales"></section>
+  <section class="panel" id="p-ventas"></section>
+  <section class="panel" id="p-inventario"></section>
+  <section class="panel" id="p-cxp"></section>
+  <section class="panel" id="p-cxc"></section>
+  <section class="panel" id="p-pe"></section>
+</main>
+</div>
+
+<script>
+/* ======================================================================
+   CONFIGURACIÓN
+   - Nombres de colecciones de Firestore (ajusta aquí si alguna difiere)
+   - FIREBASE_CONFIG: déjalo en null para pegarlo desde la pantalla de entrada
+   ====================================================================== */
+const FIREBASE_CONFIG = null;
+const COLS = {
+  destaraje:'destaraje', cxp:'cuentas_por_pagar', ventas:'ventas',
+  cxc:'cuentas_por_cobrar', cobros:'cobros', pagos:'pagos', gastos:'gastos',
+  invIni:'inventario_inicial', inv:'inventario', prod:'control_produccion', precios:'precios'
+};
+const UNIDAD_PZ = /^(CAJA|TAMBO)/i;           // productos que se venden por pieza
+const SUFIJO_USUARIO = '@everplastic.local';
+
+/* ======================================================================
+   UTILIDADES
+   ====================================================================== */
+const $ = id => document.getElementById(id);
+const num = x => { const n = parseFloat(x); return isFinite(n) ? n : 0; };
+const fmt$ = n => (n<0?'-':'') + '$' + Math.abs(n).toLocaleString('es-MX',{maximumFractionDigits:0});
+const fmt$2 = n => '$' + n.toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2});
+const fmtN = (n,d=0) => n.toLocaleString('es-MX',{maximumFractionDigits:d});
+const fmtPct = n => (isFinite(n)?n:0).toFixed(0)+'%';
+const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const iso = d => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+const fdate = s => { if(!s) return ''; const p=String(s).slice(0,10).split('-'); return p.length===3?`${p[2]}/${p[1]}/${p[0]}`:s; };
+const norm = s => String(s||'').trim().toUpperCase();
+const sum = (a,f) => a.reduce((t,x)=>t+f(x),0);
+const MESES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+const mesLbl = k => MESES[+k.slice(5,7)-1]+' '+k.slice(2,4);
+const dayDiff = (a,b) => Math.round((new Date(b)-new Date(a))/86400000);
+
+let DB = null, DEMO = false, db = null, auth = null, charts = {};
+let PER = {desde:'',hasta:'',label:''};
+const HOY = iso(new Date());
+
+function grp(arr, keyF, valF){            // agrupa y suma varios campos
+  const m = {};
+  arr.forEach(x=>{ const k=keyF(x); if(!k) return; const v=valF(x); const o=m[k]||(m[k]={}); for(const f in v) o[f]=(o[f]||0)+v[f]; });
+  return m;
+}
+function chart(id, cfg){
+  if(charts[id]) charts[id].destroy();
+  const el=$(id); if(!el) return;
+  charts[id]=new Chart(el.getContext('2d'),cfg);
+}
+const C_NAVY='#003566', C_GOLD='#FFC300', C_RED='#d64545', C_GREEN='#1a9a5b';
+
+/* ======================================================================
+   LOGIN
+   ====================================================================== */
+function getCfg(){
+  if(FIREBASE_CONFIG) return FIREBASE_CONFIG;
+  try{ return JSON.parse(localStorage.getItem('eve_dash_cfg')||'null'); }catch(e){ return null; }
+}
+function parseCfg(txt){
+  const out={}; const re=/["']?(apiKey|authDomain|projectId|storageBucket|messagingSenderId|appId|measurementId)["']?\s*:\s*["']([^"']+)["']/g; let m;
+  while((m=re.exec(txt))) out[m[1]]=m[2];
+  return out.apiKey&&out.projectId?out:null;
+}
+function initLogin(){
+  const cfg=getCfg();
+  $('cfgBox').style.display = cfg?'none':'block';
+  $('userBox').style.display = cfg?'block':'none';
+  $('btnLogin').textContent = cfg?'Entrar':'Guardar configuración';
+}
+$('lnkCfg').onclick = e=>{ e.preventDefault(); $('cfgBox').style.display='block'; $('btnLogin').textContent='Guardar configuración'; };
+$('btnLogin').onclick = async ()=>{
+  $('loginErr').textContent='';
+  if($('cfgBox').style.display!=='none' && $('cfgText').value.trim()){
+    const c=parseCfg($('cfgText').value);
+    if(!c){ $('loginErr').textContent='No pude leer la configuración. Pega el objeto firebaseConfig completo.'; return; }
+    localStorage.setItem('eve_dash_cfg',JSON.stringify(c)); initLogin(); $('cfgText').value=''; return;
+  }
+  const cfg=getCfg(); if(!cfg){ initLogin(); return; }
+  try{
+    if(!firebase.apps.length) firebase.initializeApp(cfg);
+    auth=firebase.auth(); db=firebase.firestore();
+    let u=$('usr').value.trim(); if(!u) throw new Error('Captura tu usuario');
+    if(!u.includes('@')) u+=SUFIJO_USUARIO;
+    await auth.signInWithEmailAndPassword(u,$('pwd').value);
+    DEMO=false; await arrancar();
+  }catch(e){ $('loginErr').textContent='No se pudo entrar: '+(e.message||e); }
+};
+$('btnDemo').onclick = async ()=>{ DEMO=true; await arrancar(); };
+$('btnSalir').onclick = ()=>{ if(auth) auth.signOut(); location.reload(); };
+$('btnRef').onclick = ()=>cargarYRender();
+
+async function arrancar(){
+  $('login').style.display='none'; $('app').style.display='block';
+  $('subTitle').textContent = DEMO?'MODO DEMO · datos ficticios':'Conectado · '+(auth&&auth.currentUser?auth.currentUser.email:'');
+  await cargarYRender();
+}
+
+/* ======================================================================
+   CARGA DE DATOS
+   ====================================================================== */
+async function cargarYRender(){
+  $('warns').innerHTML='<div class="warnbar">Cargando datos…</div>';
+  if(DEMO){ DB=demoData(); $('warns').innerHTML=''; }
+  else{
+    const keys=Object.keys(COLS);
+    const res=await Promise.allSettled(keys.map(k=>db.collection(COLS[k]).get()));
+    DB={}; const fails=[];
+    res.forEach((r,i)=>{
+      const k=keys[i];
+      if(r.status==='fulfilled') DB[k]=r.value.docs.map(d=>({id:d.id,...d.data()}));
+      else{ DB[k]=[]; fails.push(COLS[k]); }
+    });
+    $('warns').innerHTML = fails.length?`<div class="warnbar">⚠️ No se pudieron leer estas colecciones (permisos o nombre distinto): <b>${fails.join(', ')}</b>. Los números que dependen de ellas aparecerán en cero.</div>`:'';
+  }
+  renderAll();
+}
+
+/* ======================================================================
+   PERIODO
+   ====================================================================== */
+function calcPeriodo(){
+  const v=$('selPeriodo').value, t=new Date(), y=t.getFullYear(), m=t.getMonth();
+  $('rangoBox').style.display = v==='rango'?'inline-flex':'none';
+  if(v==='mes') PER={desde:iso(new Date(y,m,1)),hasta:iso(new Date(y,m+1,0)),label:'Este mes ('+MESES[m]+' '+y+')'};
+  else if(v==='mesant') PER={desde:iso(new Date(y,m-1,1)),hasta:iso(new Date(y,m,0)),label:'Mes anterior'};
+  else if(v==='90') PER={desde:iso(new Date(Date.now()-90*86400000)),hasta:HOY,label:'Últimos 90 días'};
+  else if(v==='anio') PER={desde:y+'-01-01',hasta:y+'-12-31',label:'Año '+y};
+  else if(v==='todo') PER={desde:'0000-00-00',hasta:'9999-99-99',label:'Todo el histórico'};
+  else { PER={desde:$('fDesde').value||'0000-00-00',hasta:$('fHasta').value||'9999-99-99',label:'Rango '+fdate($('fDesde').value)+' a '+fdate($('fHasta').value)}; }
+}
+const inP = f => { f=String(f||'').slice(0,10); return f>=PER.desde && f<=PER.hasta; };
+['selPeriodo','fDesde','fHasta'].forEach(id=>$(id).onchange=()=>renderAll());
+
+/* ======================================================================
+   CÁLCULOS
+   ====================================================================== */
+function calc(){
+  const D=DB, R={};
+  // --- Compras de material (CxP generadas en el periodo)
+  const cxpP=D.cxp.filter(c=>inP(c.fechaTicket));
+  R.compras=grp(cxpP,c=>norm(c.material),c=>({kg:num(c.kg),monto:num(c.total)}));
+  R.comprasKg=sum(Object.values(R.compras),x=>x.kg); R.comprasMonto=sum(Object.values(R.compras),x=>x.monto);
+  R.kgBascula=sum(D.destaraje.filter(r=>inP(r.fechaSalida||r.fechaEntrada)),r=>num(r.kg));
+  // --- Ventas del periodo (por línea)
+  const lin=[]; D.ventas.filter(v=>inP(v.fecha)).forEach(v=>(v.lineas||[]).forEach(l=>lin.push({...l,cliente:v.cliente,fecha:v.fecha})));
+  R.ventasLin=lin;
+  R.ventas=grp(lin,l=>norm(l.material),l=>({cant:num(l.cantidad),monto:l.subtotal!=null?num(l.subtotal):num(l.cantidad)*num(l.precioUnitario)}));
+  R.ventasUnidad={}; lin.forEach(l=>R.ventasUnidad[norm(l.material)]=l.unidad||(UNIDAD_PZ.test(l.material)?'PZ':'KG'));
+  R.ventasMonto=sum(Object.values(R.ventas),x=>x.monto);
+  R.ventasKg=sum(Object.entries(R.ventas),([k,x])=>R.ventasUnidad[k]==='PZ'?0:x.cant);
+  // --- Cobros, pagos y gastos del periodo
+  R.cobrado=sum(D.cobros.filter(c=>!c.revertido&&inP(c.fecha)),c=>num(c.monto??c.cobrado??c.total));
+  R.pagado=sum(D.pagos.filter(p=>!p.revertido&&inP(p.fecha)),p=>num(p.monto??p.pagado??p.total));
+  R.gastos=sum(D.gastos.filter(g=>inP(g.fecha)),g=>num(g.total??g.monto));
+  R.flujo=R.cobrado-R.pagado-R.gastos;
+  // --- Precios vigentes y costo promedio
+  const costoProm=grp(D.cxp,c=>norm(c.material),c=>({kg:num(c.kg),m:num(c.total)}));
+  R.precioMat=m=>{
+    const ps=D.precios.filter(p=>norm(p.material)===m&&String(p.fechaInicio)<=HOY&&(!p.fechaFin||String(p.fechaFin)>=HOY)).sort((a,b)=>String(b.fechaInicio).localeCompare(String(a.fechaInicio)));
+    if(ps.length) return num(ps[0].precio);
+    const c=costoProm[m]; return c&&c.kg>0?c.m/c.kg:null;
+  };
+  // --- Inventario actual (suma de todas las etapas, al día de hoy)
+  const inv={}; const add=(m,kg)=>{m=norm(m); if(!m) return; inv[m]=(inv[m]||0)+kg;};
+  D.invIni.forEach(r=>add(r.material,num(r.kg)));
+  D.inv.forEach(r=>add(r.material,num(r.ajusteNeto)));
+  D.destaraje.forEach(r=>add(r.material,num(r.kg)));
+  D.prod.forEach(p=>{ (p.inputs||[]).forEach(i=>add(i.material,-num(i.kg))); (p.outputs||[]).forEach(o=>{ if(!o.esMerma) add(o.material,num(o.kg)); }); });
+  D.ventas.forEach(v=>(v.lineas||[]).forEach(l=>add(l.material,-num(l.cantidad))));
+  R.inv=Object.entries(inv).map(([m,kg])=>{const p=UNIDAD_PZ.test(m)?null:R.precioMat(m);return{m,kg:Math.round(kg*100)/100,pz:UNIDAD_PZ.test(m),precio:p,valor:p!=null?kg*p:null};})
+    .filter(x=>Math.abs(x.kg)>0.005).sort((a,b)=>(b.valor||0)-(a.valor||0));
+  R.invKg=sum(R.inv.filter(x=>!x.pz&&x.kg>0),x=>x.kg);
+  R.invValor=sum(R.inv.filter(x=>x.valor!=null&&x.kg>0),x=>x.valor);
+  R.invSinValuar=R.inv.filter(x=>x.valor==null&&x.kg>0).length;
+  // --- CxP pendiente
+  const pend=D.cxp.filter(c=>num(c.saldo)>0.01);
+  R.cxpLista=pend; R.cxpTotal=sum(pend,c=>num(c.saldo));
+  R.cxpProv=grp(pend,c=>c.proveedor||'(sin proveedor)',c=>({saldo:num(c.saldo)}));
+  R.cxpProvMat=grp(pend,c=>(c.proveedor||'(sin proveedor)')+'||'+norm(c.material),c=>({saldo:num(c.saldo),kg:num(c.kg)}));
+  R.cxpMat=grp(pend,c=>norm(c.material),c=>({saldo:num(c.saldo)}));
+  R.cxpAging=aging(pend,c=>c.fechaTicket,c=>num(c.saldo));
+  // --- CxC pendiente
+  const sCxc=c=>c.saldo!=null?num(c.saldo):num(c.total)-num(c.cobrado);
+  const cp=D.cxc.filter(c=>sCxc(c)>0.01);
+  R.cxcLista=cp; R.cxcTotal=sum(cp,sCxc);
+  R.cxcCli=grp(cp,c=>c.cliente||'(sin cliente)',c=>({saldo:sCxc(c)}));
+  R.cxcMat=grp(cp,c=>norm(c.material)||'(varios)',c=>({saldo:sCxc(c)}));
+  R.cxcAging=aging(cp,c=>c.fecha||c.fechaVenta,sCxc);
+  R.sCxc=sCxc;
+  // --- Tendencia mensual (últimos 6 meses)
+  const meses=[]; const t=new Date(); for(let i=5;i>=0;i--){const d=new Date(t.getFullYear(),t.getMonth()-i,1); meses.push(iso(d).slice(0,7));}
+  R.meses=meses;
+  R.serieVentas=meses.map(k=>sum(D.ventas.filter(v=>String(v.fecha).slice(0,7)===k),v=>sum(v.lineas||[],l=>l.subtotal!=null?num(l.subtotal):num(l.cantidad)*num(l.precioUnitario))));
+  R.serieCompras=meses.map(k=>sum(D.cxp.filter(c=>String(c.fechaTicket).slice(0,7)===k),c=>num(c.total)));
+  // --- Punto de equilibrio
+  const fijo=g=>/fij/i.test(String(g.clasificacion||g.tipo||g.tipoCosto||g.categoriaCosto||''));
+  const gf=D.gastos.filter(fijo);
+  const m3=meses.slice(3); // últimos 3 meses
+  const cfAuto=gf.length? sum(gf.filter(g=>m3.includes(String(g.fecha).slice(0,7))),g=>num(g.total??g.monto))/3 : 0;
+  const v3=sum(R.serieVentas.slice(3),x=>x), c3=sum(R.serieCompras.slice(3),x=>x);
+  let mcAuto=v3>0?1-c3/v3:0.30; mcAuto=Math.min(0.95,Math.max(0.05,mcAuto));
+  R.cfAuto=Math.round(cfAuto); R.mcAuto=Math.round(mcAuto*100);
+  return R;
+}
+function aging(arr,fechaF,valF){
+  const b=[{l:'0-7 días',v:0},{l:'8-15 días',v:0},{l:'16-30 días',v:0},{l:'Más de 30 días',v:0}];
+  arr.forEach(x=>{const d=dayDiff(String(fechaF(x)||HOY).slice(0,10),HOY); const i=d<=7?0:d<=15?1:d<=30?2:3; b[i].v+=valF(x);});
+  return b;
+}
+
+/* ======================================================================
+   RENDER
+   ====================================================================== */
+function kpi(cls,lbl,val,hint){return `<div class="card kpi ${cls}"><div class="lbl">${lbl}</div><div class="val">${val}</div><div class="hint">${hint||''}</div></div>`;}
+function barRow(pct,cls=''){return `<div class="bar ${cls}"><i style="width:${Math.max(0,Math.min(100,pct))}%"></i></div>`;}
+
+function peParams(){
+  let s={}; try{s=JSON.parse(localStorage.getItem('eve_dash_pe')||'{}');}catch(e){}
+  return {cf:s.cf!=null?s.cf:null, mc:s.mc!=null?s.mc:null};
+}
+
+let R=null;
+function renderAll(){
+  calcPeriodo(); R=calc();
+  rResumen(); rMateriales(); rVentas(); rInventario(); rCxP(); rCxC(); rPE();
+}
+
+/* ---------- RESUMEN ---------- */
+function peCalc(){
+  const p=peParams(); const cf=p.cf!=null?p.cf:R.cfAuto; const mc=(p.mc!=null?p.mc:R.mcAuto)/100;
+  const pe=mc>0?cf/mc:0;
+  const km=R.meses[5]; const ventasMes=R.serieVentas[5];
+  return {cf,mc,pe,ventasMes,cob:pe>0?ventasMes/pe:0,km};
+}
+function rResumen(){
+  const pe=peCalc(), neto=R.invValor+R.cxcTotal-R.cxpTotal;
+  const cls=pe.pe<=0?'blue':pe.cob>=1?'ok':pe.cob>=.7?'warn':'bad';
+  $('p-resumen').innerHTML=`
+  <div class="lectura">📌 <b>Lectura rápida · ${esc(PER.label)}:</b> se vendieron <b>${fmt$(R.ventasMonto)}</b> y se compró material por <b>${fmt$(R.comprasMonto)}</b>.
+  El flujo de efectivo del periodo fue <b class="${R.flujo<0?'neg':'pos'}">${fmt$(R.flujo)}</b> (cobrado − pagado − gastos).
+  Hoy <b>debemos ${fmt$(R.cxpTotal)}</b> a proveedores y <b>nos deben ${fmt$(R.cxcTotal)}</b>.
+  ${pe.pe>0?`En el mes en curso llevamos <b>${fmtPct(pe.cob*100)}</b> del punto de equilibrio.`:''}</div>
+
+  <h2>Flujo del periodo</h2>
+  <div class="grid g4">
+    ${kpi('gold','Ventas',fmt$(R.ventasMonto),'Sin IVA · '+fmtN(R.ventasKg)+' kg vendidos')}
+    ${kpi('blue','Compras de material',fmt$(R.comprasMonto),fmtN(R.comprasKg)+' kg comprados')}
+    ${kpi('ok','Cobrado a clientes',fmt$(R.cobrado),'Efectivo que entró')}
+    ${kpi('bad','Pagado a proveedores',fmt$(R.pagado),'Efectivo que salió'+(R.gastos?' · + gastos '+fmt$(R.gastos):''))}
+    ${kpi(R.flujo<0?'bad':'ok','Flujo neto de efectivo',fmt$(R.flujo),'Cobrado − pagado − gastos')}
+  </div>
+
+  <h2>Situación de hoy</h2>
+  <div class="grid g4">
+    ${kpi('blue','Inventario valuado',fmt$(R.invValor),fmtN(R.invKg)+' kg en planta')}
+    ${kpi('warn','Nos deben (CxC)',fmt$(R.cxcTotal),R.cxcLista.length+' cuentas abiertas')}
+    ${kpi('bad','Debemos (CxP)',fmt$(R.cxpTotal),Object.keys(R.cxpProv).length+' proveedores con saldo')}
+    ${kpi(neto<0?'bad':'ok','Posición neta',fmt$(neto),'Inventario + CxC − CxP')}
+    ${kpi(cls,'Punto de equilibrio',pe.pe>0?fmtPct(pe.cob*100):'—',pe.pe>0?'Meta mensual: '+fmt$(pe.pe):'Captura costos fijos en la pestaña')}
+  </div>
+
+  <h2>Tendencia últimos 6 meses</h2>
+  <div class="card"><div class="chartbox"><canvas id="chTend"></canvas></div>
+  <div class="note">Barras: ventas vs. compras de material cada mes. Si las compras superan a las ventas, se está acumulando inventario o hay margen comprimido.</div></div>`;
+  chart('chTend',{type:'bar',data:{labels:R.meses.map(mesLbl),datasets:[
+    {label:'Ventas',data:R.serieVentas,backgroundColor:C_GOLD},
+    {label:'Compras de material',data:R.serieCompras,backgroundColor:C_NAVY}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{tooltip:{callbacks:{label:c=>c.dataset.label+': '+fmt$(c.raw)}}},scales:{y:{ticks:{callback:v=>fmt$(v)}}}}});
+}
+
+/* ---------- MATERIALES ---------- */
+function rMateriales(){
+  const rows=Object.entries(R.compras).sort((a,b)=>b[1].monto-a[1].monto);
+  const max=Math.max(1,...rows.map(r=>r[1].monto));
+  const dif=R.kgBascula-R.comprasKg;
+  $('p-materiales').innerHTML=`
+  <div class="lectura">♻️ <b>Compras de material · ${esc(PER.label)}:</b> entraron <b>${fmtN(R.comprasKg)} kg</b> con un costo de <b>${fmt$(R.comprasMonto)}</b>
+  (promedio <b>${fmt$2(R.comprasKg>0?R.comprasMonto/R.comprasKg:0)}/kg</b>).
+  ${rows[0]?`El material con más gasto es <b>${esc(rows[0][0])}</b> (${fmtPct(rows[0][1].monto/R.comprasMonto*100)} del total).`:''}</div>
+  ${Math.abs(dif)>1?`<div class="warnbar">En báscula (Destaraje) hay ${fmtN(R.kgBascula)} kg en el periodo, y ${fmtN(R.comprasKg)} kg con cuenta por pagar. Diferencia: <b>${fmtN(dif)} kg</b> (tickets sin precio vigente o aún sin aprobar).</div>`:''}
+  <div class="grid g2">
+    <div class="card"><h3>$ gastado por material</h3><div class="chartbox"><canvas id="chMat"></canvas></div></div>
+    <div class="card"><h3>Detalle</h3><table><thead><tr><th>Material</th><th class="n">Kg</th><th class="n">$</th><th class="n">$/kg</th><th>Peso</th></tr></thead><tbody>
+    ${rows.map(([m,x])=>`<tr><td>${esc(m)}</td><td class="n">${fmtN(x.kg)}</td><td class="n">${fmt$(x.monto)}</td><td class="n">${x.kg>0?fmt$2(x.monto/x.kg):'—'}</td><td style="width:90px">${barRow(x.monto/max*100,'g')}</td></tr>`).join('')||'<tr><td colspan="5">Sin compras en el periodo</td></tr>'}
+    <tr class="tot"><td>TOTAL</td><td class="n">${fmtN(R.comprasKg)}</td><td class="n">${fmt$(R.comprasMonto)}</td><td class="n">${R.comprasKg>0?fmt$2(R.comprasMonto/R.comprasKg):'—'}</td><td></td></tr></tbody></table></div>
+  </div>`;
+  chart('chMat',{type:'bar',data:{labels:rows.map(r=>r[0]),datasets:[{label:'$',data:rows.map(r=>r[1].monto),backgroundColor:C_NAVY}]},
+    options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>fmt$(c.raw)+' · '+fmtN(rows[c.dataIndex][1].kg)+' kg'}}},scales:{x:{ticks:{callback:v=>fmt$(v)}}}}});
+}
+
+/* ---------- VENTAS ---------- */
+function rVentas(){
+  const rows=Object.entries(R.ventas).sort((a,b)=>b[1].monto-a[1].monto);
+  const max=Math.max(1,...rows.map(r=>r[1].monto));
+  const porCli=grp(R.ventasLin,l=>l.cliente||'(sin cliente)',l=>({monto:l.subtotal!=null?num(l.subtotal):num(l.cantidad)*num(l.precioUnitario)}));
+  const cli=Object.entries(porCli).sort((a,b)=>b[1].monto-a[1].monto).slice(0,5);
+  const u=m=>R.ventasUnidad[m]==='PZ'?'pz':'kg';
+  $('p-ventas').innerHTML=`
+  <div class="lectura">💰 <b>Ventas · ${esc(PER.label)}:</b> <b>${fmt$(R.ventasMonto)}</b> (sin IVA).
+  ${rows[0]?`El producto que más vende es <b>${esc(rows[0][0])}</b> con ${fmt$(rows[0][1].monto)} (${fmtPct(rows[0][1].monto/R.ventasMonto*100)}).`:'Sin ventas registradas en el periodo.'}
+  ${cli[0]?`Cliente principal: <b>${esc(cli[0][0])}</b> (${fmtPct(cli[0][1].monto/R.ventasMonto*100)}).`:''}</div>
+  <div class="grid g2">
+    <div class="card"><h3>$ vendido por producto</h3><div class="chartbox"><canvas id="chVen"></canvas></div></div>
+    <div class="card"><h3>Detalle por producto</h3><table><thead><tr><th>Producto</th><th class="n">Cantidad</th><th class="n">$</th><th class="n">Precio prom.</th><th>Peso</th></tr></thead><tbody>
+    ${rows.map(([m,x])=>`<tr><td>${esc(m)}</td><td class="n">${fmtN(x.cant,1)} ${u(m)}</td><td class="n">${fmt$(x.monto)}</td><td class="n">${x.cant>0?fmt$2(x.monto/x.cant):'—'}</td><td style="width:90px">${barRow(x.monto/max*100,'g')}</td></tr>`).join('')||'<tr><td colspan="5">Sin ventas</td></tr>'}
+    <tr class="tot"><td>TOTAL</td><td class="n">—</td><td class="n">${fmt$(R.ventasMonto)}</td><td class="n"></td><td></td></tr></tbody></table>
+    <div class="note">Las piezas (cajas y tambos) y los kilos no se suman entre sí.</div></div>
+  </div>
+  <div class="card" style="margin-top:14px"><h3>Top 5 clientes del periodo</h3><table><tbody>
+  ${cli.map(([c,x])=>`<tr><td>${esc(c)}</td><td class="n">${fmt$(x.monto)}</td><td style="width:140px">${barRow(x.monto/cli[0][1].monto*100)}</td></tr>`).join('')||'<tr><td>Sin datos</td></tr>'}</tbody></table></div>`;
+  chart('chVen',{type:'bar',data:{labels:rows.map(r=>r[0]),datasets:[{label:'$',data:rows.map(r=>r[1].monto),backgroundColor:C_GOLD}]},
+    options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>fmt$(c.raw)+' · '+fmtN(rows[c.dataIndex][1].cant,1)+' '+u(rows[c.dataIndex][0])}}},scales:{x:{ticks:{callback:v=>fmt$(v)}}}}});
+}
+
+/* ---------- INVENTARIO ---------- */
+function rInventario(){
+  const rows=R.inv;
+  const neg=rows.filter(x=>x.kg<0);
+  $('p-inventario').innerHTML=`
+  <div class="lectura">📦 <b>Inventario al día de hoy:</b> hay <b>${fmtN(R.invKg)} kg</b> de material en planta, valuados en <b>${fmt$(R.invValor)}</b>
+  (al precio vigente de compra; si no hay precio, al costo promedio histórico).</div>
+  ${neg.length?`<div class="warnbar">⚠️ ${neg.length} material(es) con saldo negativo (${neg.map(x=>esc(x.m)).join(', ')}): se vendió o consumió más de lo registrado. Conviene un ajuste en el módulo Inventario.</div>`:''}
+  ${R.invSinValuar?`<div class="warnbar">${R.invSinValuar} material(es) sin precio de referencia aparecen sin valuar (productos terminados y piezas).</div>`:''}
+  <div class="grid g2">
+    <div class="card"><h3>Valor por material</h3><div class="chartbox"><canvas id="chInv"></canvas></div></div>
+    <div class="card"><h3>Detalle</h3><table><thead><tr><th>Material</th><th class="n">Existencia</th><th class="n">$/kg</th><th class="n">Valor</th></tr></thead><tbody>
+    ${rows.map(x=>`<tr><td>${esc(x.m)}</td><td class="n ${x.kg<0?'neg':''}">${fmtN(x.kg,1)} ${x.pz?'pz':'kg'}</td><td class="n">${x.precio!=null?fmt$2(x.precio):'—'}</td><td class="n">${x.valor!=null?fmt$(x.valor):'sin valuar'}</td></tr>`).join('')||'<tr><td colspan="4">Sin existencias calculadas</td></tr>'}
+    <tr class="tot"><td>TOTAL</td><td class="n">${fmtN(R.invKg)} kg</td><td></td><td class="n">${fmt$(R.invValor)}</td></tr></tbody></table>
+    <div class="note">Cálculo: inventario inicial + recepciones − consumos de producción + salidas de producción (sin merma) − ventas ± ajustes. Suma todas las etapas del material, por eso puede diferir ligeramente de la matriz del módulo Inventario.</div></div>
+  </div>`;
+  const top=rows.filter(x=>x.valor!=null&&x.valor>0).slice(0,12);
+  chart('chInv',{type:'bar',data:{labels:top.map(x=>x.m),datasets:[{label:'$',data:top.map(x=>x.valor),backgroundColor:C_NAVY}]},
+    options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>fmt$(c.raw)+' · '+fmtN(top[c.dataIndex].kg)+' kg'}}},scales:{x:{ticks:{callback:v=>fmt$(v)}}}}});
+}
+
+/* ---------- CxP ---------- */
+let cxpVista='prov';
+function rCxP(){
+  const provs=Object.entries(R.cxpProv).sort((a,b)=>b[1].saldo-a[1].saldo);
+  const mats=Object.entries(R.cxpMat).sort((a,b)=>b[1].saldo-a[1].saldo);
+  const top=provs[0];
+  let lista='';
+  if(cxpVista==='prov'){
+    lista=provs.map(([p,x])=>{
+      const det=Object.entries(R.cxpProvMat).filter(([k])=>k.startsWith(p+'||')).map(([k,v])=>[k.split('||')[1],v]).sort((a,b)=>b[1].saldo-a[1].saldo);
+      return `<details><summary><span>${esc(p)}</span><span class="mono">${fmt$(x.saldo)}</span></summary><table><thead><tr><th>Material</th><th class="n">Kg</th><th class="n">Saldo</th></tr></thead><tbody>${det.map(([m,v])=>`<tr><td>${esc(m)}</td><td class="n">${fmtN(v.kg)}</td><td class="n">${fmt$(v.saldo)}</td></tr>`).join('')}</tbody></table></details>`;}).join('');
+  }else{
+    lista=mats.map(([m,x])=>{
+      const det=Object.entries(R.cxpProvMat).filter(([k])=>k.endsWith('||'+m)).map(([k,v])=>[k.split('||')[0],v]).sort((a,b)=>b[1].saldo-a[1].saldo);
+      return `<details><summary><span>${esc(m)}</span><span class="mono">${fmt$(x.saldo)}</span></summary><table><thead><tr><th>Proveedor</th><th class="n">Kg</th><th class="n">Saldo</th></tr></thead><tbody>${det.map(([p,v])=>`<tr><td>${esc(p)}</td><td class="n">${fmtN(v.kg)}</td><td class="n">${fmt$(v.saldo)}</td></tr>`).join('')}</tbody></table></details>`;}).join('');
+  }
+  const vencido=R.cxpAging[3].v+R.cxpAging[2].v;
+  $('p-cxp').innerHTML=`
+  <div class="lectura">🏭 <b>Cuentas por pagar al día de hoy:</b> debemos <b>${fmt$(R.cxpTotal)}</b> a <b>${provs.length}</b> proveedores.
+  ${top?`El mayor saldo es con <b>${esc(top[0])}</b> (${fmt$(top[1].saldo)}, ${fmtPct(top[1].saldo/R.cxpTotal*100)}).`:''}
+  ${vencido>0?`<b>${fmt$(vencido)}</b> tienen más de 15 días de antigüedad.`:''}</div>
+  <div class="grid g2">
+    <div class="card"><h3>Saldo por proveedor (Top 10)</h3><div class="chartbox"><canvas id="chCxp"></canvas></div></div>
+    <div class="card"><h3>Antigüedad del saldo</h3><div class="chartbox"><canvas id="chCxpAg"></canvas></div></div>
+  </div>
+  <h2>Detalle <small style="font-weight:400;color:#6b778c">(toca para desplegar)</small></h2>
+  <div class="card">
+    <div class="tabs2"><button class="${cxpVista==='prov'?'on':''}" onclick="cxpVista='prov';rCxP()">Por proveedor → material</button><button class="${cxpVista==='mat'?'on':''}" onclick="cxpVista='mat';rCxP()">Por material → proveedor</button></div>
+    ${lista||'<div class="note">Sin saldos pendientes 🎉</div>'}
+    <details open style="border:0"><summary style="border-top:2px solid var(--navy);margin-top:6px"><span>TOTAL GLOBAL</span><span class="mono">${fmt$(R.cxpTotal)}</span></summary></details>
+  </div>`;
+  const t10=provs.slice(0,10);
+  chart('chCxp',{type:'bar',data:{labels:t10.map(x=>x[0]),datasets:[{label:'$',data:t10.map(x=>x[1].saldo),backgroundColor:C_RED}]},
+    options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>fmt$(c.raw)}}},scales:{x:{ticks:{callback:v=>fmt$(v)}}}}});
+  chart('chCxpAg',{type:'doughnut',data:{labels:R.cxpAging.map(b=>b.l),datasets:[{data:R.cxpAging.map(b=>b.v),backgroundColor:[C_GREEN,C_GOLD,'#e69500',C_RED]}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{tooltip:{callbacks:{label:c=>c.label+': '+fmt$(c.raw)}}}}});
+}
+
+/* ---------- CxC ---------- */
+function rCxC(){
+  const cli=Object.entries(R.cxcCli).sort((a,b)=>b[1].saldo-a[1].saldo);
+  const max=Math.max(1,...cli.map(c=>c[1].saldo));
+  const venc=R.cxcAging[3].v+R.cxcAging[2].v;
+  $('p-cxc').innerHTML=`
+  <div class="lectura">🤝 <b>Cuentas por cobrar al día de hoy:</b> nos deben <b>${fmt$(R.cxcTotal)}</b> en <b>${cli.length}</b> clientes.
+  ${cli[0]?`El mayor deudor es <b>${esc(cli[0][0])}</b> (${fmt$(cli[0][1].saldo)}, ${fmtPct(cli[0][1].saldo/R.cxcTotal*100)}).`:''}
+  ${venc>0?`<b>${fmt$(venc)}</b> llevan más de 15 días sin cobrarse.`:''}
+  ${R.cxcTotal>0&&R.cxpTotal>0?` Cobrando todo cubrimos <b>${fmtPct(R.cxcTotal/R.cxpTotal*100)}</b> de lo que debemos.`:''}</div>
+  <div class="grid g2">
+    <div class="card"><h3>Saldo por cliente</h3><table><thead><tr><th>Cliente</th><th class="n">Saldo</th><th>Peso</th></tr></thead><tbody>
+    ${cli.map(([c,x])=>`<tr><td>${esc(c)}</td><td class="n">${fmt$(x.saldo)}</td><td style="width:120px">${barRow(x.saldo/max*100,'g')}</td></tr>`).join('')||'<tr><td colspan="3">Sin saldos pendientes 🎉</td></tr>'}
+    <tr class="tot"><td>TOTAL</td><td class="n">${fmt$(R.cxcTotal)}</td><td></td></tr></tbody></table></div>
+    <div class="card"><h3>Antigüedad del saldo</h3><div class="chartbox"><canvas id="chCxcAg"></canvas></div></div>
+  </div>`;
+  chart('chCxcAg',{type:'doughnut',data:{labels:R.cxcAging.map(b=>b.l),datasets:[{data:R.cxcAging.map(b=>b.v),backgroundColor:[C_GREEN,C_GOLD,'#e69500',C_RED]}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{tooltip:{callbacks:{label:c=>c.label+': '+fmt$(c.raw)}}}}});
+}
+
+/* ---------- PUNTO DE EQUILIBRIO ---------- */
+function rPE(){
+  const p=peParams(), P=peCalc();
+  const t=new Date(), diasMes=new Date(t.getFullYear(),t.getMonth()+1,0).getDate(), dia=t.getDate(), resta=diasMes-dia;
+  const falta=Math.max(0,P.pe-P.ventasMes), req=resta>0?falta/resta:falta;
+  const ritmo=dia>0?P.ventasMes/dia*diasMes:0;
+  const cls=P.pe<=0?'':P.cob>=1?'ok':P.cob>=.7?'warn':'bad';
+  const color=cls==='ok'?C_GREEN:cls==='warn'?'#e69500':C_RED;
+  $('p-pe').innerHTML=`
+  <div class="lectura">⚖️ <b>¿Cuánto hay que vender al mes para no perder?</b> Es el monto de ventas donde los ingresos igualan a los costos.
+  Por debajo se pierde dinero; por encima se gana. Se calcula: <b>Costos fijos ÷ Margen de contribución</b>.</div>
+  <div class="card noprint"><h3>Supuestos (editables)</h3>
+    <div class="pe-in">
+      <div><label>Costos fijos mensuales ($)</label><input type="number" id="inCf" value="${P.cf}" min="0" step="1000" style="width:170px"></div>
+      <div><label>Margen de contribución (%)</label><input type="number" id="inMc" value="${Math.round(P.mc*100)}" min="1" max="99" style="width:120px"></div>
+      <button class="btn dark" id="btnPe">Recalcular</button>
+      <button class="btn" id="btnPeAuto" style="background:#e9eef6">Usar valores automáticos</button>
+    </div>
+    <div class="note">Costos fijos automáticos: ${R.cfAuto>0?'promedio de los últimos 3 meses en Gastos clasificados como Fijo → <b>'+fmt$(R.cfAuto)+'</b>':'no hay gastos clasificados como Fijo; captúralos aquí (nómina, renta, luz, combustible, mantenimiento, arrendamientos, préstamos, depreciación).'}<br>
+    Margen automático: <b>${R.mcAuto}%</b>, estimado como 1 − (compras de material ÷ ventas) de los últimos 3 meses. Es una aproximación: ajústalo con tu costeo variable real.</div>
+  </div>
+  <h2>${MESES[t.getMonth()]} ${t.getFullYear()} · mes en curso</h2>
+  <div class="grid g4">
+    ${kpi('blue','Meta de ventas (PE)',P.pe>0?fmt$(P.pe):'—','Para cubrir costos fijos')}
+    ${kpi('gold','Vendido en el mes',fmt$(P.ventasMes),'Día '+dia+' de '+diasMes)}
+    ${kpi(cls||'blue',P.ventasMes>=P.pe&&P.pe>0?'Ganancia sobre equilibrio':'Falta para equilibrio',P.pe>0?fmt$(Math.abs(P.ventasMes-P.pe)):'—',P.ventasMes>=P.pe&&P.pe>0?'✅ Ya cubrimos costos fijos':(resta>0?'Equivale a '+fmt$(req)+' por día restante':'Mes cerrado'))}
+    ${kpi('blue','Ritmo proyectado',fmt$(ritmo),'Si se mantiene el ritmo actual')}
+  </div>
+  <div class="card" style="margin-top:14px"><h3>Avance hacia el equilibrio</h3>
+    <div class="gauge"><i style="width:${Math.min(100,P.cob*100)}%;background:${color}"></i><span>${P.pe>0?fmtPct(P.cob*100)+' de la meta':'Captura costos fijos'}</span></div>
+    <div class="note">${P.pe>0?(ritmo>=P.pe?'🟢 Al ritmo actual se cierra el mes por encima del equilibrio.':'🔴 Al ritmo actual el mes cerraría por debajo del equilibrio por '+fmt$(P.pe-ritmo)+'.'):''}</div>
+  </div>
+  <div class="card" style="margin-top:14px"><h3>Ventas vs. punto de equilibrio · 6 meses</h3><div class="chartbox"><canvas id="chPe"></canvas></div></div>`;
+  $('btnPe').onclick=()=>{localStorage.setItem('eve_dash_pe',JSON.stringify({cf:num($('inCf').value),mc:Math.min(99,Math.max(1,num($('inMc').value)))}));renderAll();showTab('pe');};
+  $('btnPeAuto').onclick=()=>{localStorage.removeItem('eve_dash_pe');renderAll();showTab('pe');};
+  chart('chPe',{data:{labels:R.meses.map(mesLbl),datasets:[
+    {type:'bar',label:'Ventas',data:R.serieVentas,backgroundColor:R.serieVentas.map(v=>P.pe>0&&v<P.pe?C_RED:C_GREEN)},
+    {type:'line',label:'Punto de equilibrio',data:R.meses.map(()=>P.pe),borderColor:C_NAVY,borderDash:[6,4],pointRadius:0,borderWidth:3}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{tooltip:{callbacks:{label:c=>c.dataset.label+': '+fmt$(c.raw)}}},scales:{y:{ticks:{callback:v=>fmt$(v)}}}}});
+}
+
+/* ---------- NAV ---------- */
+function showTab(p){
+  document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.p===p));
+  document.querySelectorAll('.panel').forEach(s=>s.classList.toggle('on',s.id==='p-'+p));
+  Object.values(charts).forEach(c=>c.resize());
+}
+$('nav').onclick=e=>{const b=e.target.closest('button'); if(b) showTab(b.dataset.p);};
+
+/* ======================================================================
+   DATOS DEMO (ficticios, para ver cómo luce sin conectarse)
+   ====================================================================== */
+function demoData(){
+  let s=7; const rnd=()=>{s=(s*9301+49297)%233280;return s/233280;};
+  const pick=a=>a[Math.floor(rnd()*a.length)];
+  const mats=[['CRISTAL SIN ETIQUETA',9.2],['CRISTAL CON ETIQUETA',8.1],['LECHERO',6.8],['SUERO',5.4],['MIXTO',6.5],['P.E.',7.9],['P.P.',8.6],['MULTI-COLOR',4.3]];
+  const provs=['FELIX LOZANO','ARTURO LARA','JESÚS','GUSTAVO','FRANCISCO','RECICLADOS DEL BAJÍO','MARIO RAMOS'];
+  const clientes=['PLASTICOS DEL CENTRO','ENVASES MX','AGRO SAN LUIS','QUÍMICA POTOSINA','DISTRIBUIDORA NORTE'];
+  const prods=[['CRISTAL SIN ETIQUETA',13.5,'KG'],['LECHERO MOLIDO',11,'KG'],['POLIETILENO PELETIZADO',17,'KG'],['SUERO',7,'KG'],['CAJA CO30',58,'PZ'],['TAMBO',300,'PZ']];
+  const D={destaraje:[],cxp:[],ventas:[],cxc:[],cobros:[],pagos:[],gastos:[],invIni:[],inv:[],prod:[],precios:[]};
+  const hoy=new Date(); const d0=n=>iso(new Date(hoy.getTime()-n*86400000));
+  mats.forEach(([m,p])=>D.precios.push({material:m,precio:p,fechaInicio:'2026-01-01',fechaFin:null}));
+  let tk=1000;
+  for(let i=170;i>=0;i--){ const n=1+Math.floor(rnd()*3);
+    for(let j=0;j<n;j++){ const [m,p]=pick(mats), kg=Math.round(300+rnd()*1500), f=d0(i), pr=pick(provs); tk++;
+      D.destaraje.push({ticket:String(tk),proveedor:pr,material:m,kg,fechaEntrada:f,fechaSalida:f});
+      const total=Math.round(kg*p*100)/100, pagado=rnd()<(i>20?.92:.35)?total:Math.round(total*rnd()*.5);
+      D.cxp.push({ticket:String(tk),proveedor:pr,material:m,kg,fechaTicket:f,total,pagado,saldo:total-pagado});
+      if(pagado>0) D.pagos.push({fecha:f,monto:pagado,proveedor:pr}); } }
+  for(let i=170;i>=0;i--){ if(rnd()<.55){ const lineas=[]; const nl=1+Math.floor(rnd()*2);
+      for(let k=0;k<nl;k++){ const [m,p,u]=pick(prods); const c=u==='PZ'?Math.round(40+rnd()*260):Math.round(800+rnd()*3500); lineas.push({material:m,cantidad:c,unidad:u,precioUnitario:p,subtotal:Math.round(c*p)}); }
+      const tot=sum(lineas,l=>l.subtotal), cl=pick(clientes), f=d0(i), cob=rnd()<(i>25?.9:.3)?tot:0;
+      D.ventas.push({folio:'V-2026-'+i,cliente:cl,fecha:f,lineas,totalVenta:tot});
+      D.cxc.push({cliente:cl,fecha:f,material:lineas[0].material,total:tot,cobrado:cob,saldo:tot-cob});
+      if(cob>0) D.cobros.push({fecha:f,monto:cob,cliente:cl}); } }
+  for(let i=5;i>=0;i--){ const d=new Date(hoy.getFullYear(),hoy.getMonth()-i,5);
+    [['Nómina',180000],['Renta',45000],['Luz',38000],['Combustible',22000],['Mantenimientos',25000]].forEach(([c,m])=>D.gastos.push({fecha:iso(d),concepto:c,total:m,clasificacion:'Fijo'})); }
+  mats.forEach(([m])=>D.invIni.push({material:m,kg:Math.round(2000+rnd()*4000)}));
+  D.prod.push({inputs:[{material:'MIXTO',kg:5000}],outputs:[{material:'CRISTAL SIN ETIQUETA',kg:2600},{material:'LECHERO',kg:500},{material:'BASURA',kg:250,esMerma:true}],fechaFin:d0(10)});
+  return D;
+}
+
+/* ====================== INICIO ====================== */
+initLogin();
+</script>
+</body>
+</html>
