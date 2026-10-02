@@ -316,12 +316,14 @@ function calc(){
     const c=costoProm[m]; return c&&c.kg>0?c.m/c.kg:null;
   };
   // --- Inventario actual (suma de todas las etapas, al día de hoy)
-  const inv={}; const add=(m,kg)=>{m=norm(m); if(!m) return; inv[m]=(inv[m]||0)+kg;};
-  D.invIni.forEach(r=>add(r.material,num(r.kg)));
-  D.inv.forEach(r=>add(r.material,num(r.ajusteNeto)));
-  D.destaraje.forEach(r=>add(r.material,num(r.kg)));
-  D.prod.forEach(p=>{ (p.inputs||[]).forEach(i=>add(i.material,-num(i.kg))); (p.outputs||[]).forEach(o=>{ if(!o.esMerma) add(o.material,num(o.kg)); }); });
-  D.ventas.forEach(v=>(v.lineas||[]).forEach(l=>add(l.material,-num(l.cantidad))));
+  const inv={}; R.invSrc={};
+  const add=(m,kg,src,id,det)=>{m=norm(m); if(!m) return; inv[m]=(inv[m]||0)+kg;
+    const s=(R.invSrc[m]=R.invSrc[m]||{}); const o=(s[src]=s[src]||{kg:0,n:0,ids:[]}); o.kg+=kg; o.n++; if(o.ids.length<6) o.ids.push(id+(det?' ('+det+')':''));};
+  D.invIni.forEach(r=>add(r.material,num(r.kg),'inventario_inicial',r.id,r.etapa));
+  D.inv.forEach(r=>{ if(num(r.ajusteNeto)!==0) add(r.material,num(r.ajusteNeto),'inventario (ajustes)',r.id,r.etapa); });
+  D.destaraje.forEach(r=>add(r.material,num(r.kg),'destaraje (báscula)',r.ticket||r.id));
+  D.prod.forEach(p=>{ (p.inputs||[]).forEach(i=>add(i.material,-num(i.kg),'producción: consumos',p.ticket||p.id)); (p.outputs||[]).forEach(o=>{ if(!o.esMerma) add(o.material,num(o.kg),'producción: salidas',p.ticket||p.id); }); });
+  D.ventas.forEach(v=>(v.lineas||[]).forEach(l=>add(l.material,-num(l.cantidad),'ventas',v.folio||v.id)));
   R.inv=Object.entries(inv).map(([m,kg])=>{const p=UNIDAD_PZ.test(m)?null:R.precioMat(m);return{m,kg:Math.round(kg*100)/100,pz:UNIDAD_PZ.test(m),precio:p,valor:p!=null?kg*p:null};})
     .filter(x=>Math.abs(x.kg)>0.005).sort((a,b)=>(b.valor||0)-(a.valor||0));
   R.invKg=sum(R.inv.filter(x=>!x.pz&&x.kg>0),x=>x.kg);
@@ -482,7 +484,10 @@ function rInventario(){
     ${rows.map(x=>`<tr><td>${esc(x.m)}</td><td class="n ${x.kg<0?'neg':''}">${fmtN(x.kg,1)} ${x.pz?'pz':'kg'}</td><td class="n">${x.precio!=null?fmt$2(x.precio):'—'}</td><td class="n">${x.valor!=null?fmt$(x.valor):'sin valuar'}</td></tr>`).join('')||'<tr><td colspan="4">Sin existencias calculadas</td></tr>'}
     <tr class="tot"><td>TOTAL</td><td class="n">${fmtN(R.invKg)} kg</td><td></td><td class="n">${fmt$(R.invValor)}</td></tr></tbody></table>
     <div class="note">Cálculo: inventario inicial + recepciones − consumos de producción + salidas de producción (sin merma) − ventas ± ajustes. Suma todas las etapas del material, por eso puede diferir ligeramente de la matriz del módulo Inventario.</div></div>
-  </div>`;
+  </div>
+  <div class="card" style="margin-top:14px"><h3>¿De dónde sale cada existencia? <small style="font-weight:400;color:#6b778c">(toca un material)</small></h3>
+  ${rows.map(x=>{const s=R.invSrc[x.m]||{};return `<details><summary><span>${esc(x.m)}</span><span class="mono">${fmtN(x.kg,1)} ${x.pz?'pz':'kg'}</span></summary><table><thead><tr><th>Fuente (colección)</th><th class="n">Docs</th><th class="n">Kg</th><th>Ejemplos de ID</th></tr></thead><tbody>${Object.entries(s).map(([k,v])=>`<tr><td>${esc(k)}</td><td class="n">${v.n}</td><td class="n ${v.kg<0?'neg':''}">${fmtN(v.kg,1)}</td><td style="font-size:12px;color:#6b778c">${esc(v.ids.join(', '))}</td></tr>`).join('')}</tbody></table></details>`;}).join('')}
+  <div class="note">Si un material no debería existir, aquí ves en qué colección sigue guardado su registro. Bórralo en Firebase Console (Firestore → colección → documento) y pulsa ↻ Actualizar.</div></div>`;
   const top=rows.filter(x=>x.valor!=null&&x.valor>0).slice(0,12);
   chart('chInv',{type:'bar',data:{labels:top.map(x=>x.m),datasets:[{label:'$',data:top.map(x=>x.valor),backgroundColor:C_NAVY}]},
     options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>fmt$(c.raw)+' · '+fmtN(top[c.dataIndex].kg)+' kg'}}},scales:{x:{ticks:{callback:v=>fmt$(v)}}}}});
