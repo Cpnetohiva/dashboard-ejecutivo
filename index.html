@@ -305,8 +305,25 @@ function calc(){
   R.ivaVentas=sum(lin,l=>num(l.ivaTrasladado)-num(l.ivaRetenido));
   R.ventasKg=sum(Object.entries(R.ventas),([k,x])=>R.ventasUnidad[k]==='PZ'?0:x.cant);
   // --- Cobros, pagos y gastos del periodo
-  R.cobrado=sum(D.cobros.filter(c=>!c.revertido&&inP(c.fecha)),c=>c.pagado!=null?num(c.pagado)-num(c.iva):num(c.monto??c.cobrado??c.total));
-  R.pagado=sum(D.pagos.filter(p=>!p.revertido&&inP(p.fecha)),p=>num(p.pagado??p.monto??p.total));
+  // Cobrado sin IVA: parte del cobro que corresponde al subtotal de su CxC (o de la línea de venta). Así la retención de IVA no distorsiona.
+  const cxcPorId={}; D.cxc.forEach(x=>cxcPorId[x.id]=x);
+  const ventaPorId={}; D.ventas.forEach(v=>ventaPorId[v.id]=v);
+  const cobroSinIva=c=>{
+    if(c.pagado==null) return num(c.monto??c.cobrado??c.total);
+    const pag=num(c.pagado), x=cxcPorId[c.cxcId];
+    if(x&&num(x.total)>0){
+      const sub=x.subtotal!=null?num(x.subtotal):num(x.total)-num(x.ivaTrasladado)+num(x.ivaRetenido||0);
+      return pag*sub/num(x.total);
+    }
+    const v=ventaPorId[c.ventaId], l=v&&(v.lineas||[]).find(l=>norm(l.material)===norm(c.material));
+    if(l&&num(l.totalLinea)>0){
+      const sub=l.subtotal!=null?num(l.subtotal):num(l.cantidad)*num(l.precioUnitario);
+      return pag*sub/num(l.totalLinea);
+    }
+    return pag-num(c.iva);
+  };
+  R.cobrado=sum(D.cobros.filter(c=>!c.revertido&&inP(c.fecha)),cobroSinIva);
+  R.pagado=sum(D.pagos.filter(p=>!p.revertido&&inP(p.fecha)),p=>num(p.pagado??p.monto??p.total)-num(p.iva||0));
   R.anticipos=sum(D.pagos.filter(p=>!p.revertido&&p.origen==='anticipo'&&inP(p.fecha)),p=>num(p.pagado??p.monto??p.total));
   R.gastos=sum(D.gastos.filter(g=>inP(g.fecha)),g=>g.montoBase!=null?num(g.montoBase):num(g.total??g.monto));
   R.flujo=R.cobrado-R.pagado-R.gastos;
@@ -393,6 +410,7 @@ window.DIAG=function(){
   const cobIva=sum(cobP,c=>num(c.iva));
   const gasBase=sum(gasP,g=>g.montoBase!=null?num(g.montoBase):num(g.total??g.monto));
   const gasIva=sum(gasP,g=>num(g.iva));
+  const lineasRet=R.ventasLin.filter(l=>num(l.ivaRetenido)>0);
   const filas=[
     ['Ventas sin IVA',R.ventasMonto],
     ['IVA neto de ventas',R.ivaVentas],
@@ -406,10 +424,24 @@ window.DIAG=function(){
     ['Gastos montoBase',gasBase],
     ['IVA de gastos',gasIva],
     ['Gastos con IVA',gasBase+gasIva],
-    ['Compras CxP',R.comprasMonto]
-  ].map(([concepto,monto])=>({concepto,monto:r2(monto)}));
+    ['Compras CxP',R.comprasMonto],
+    ['IVA de pagos',sum(D.pagos.filter(p=>!p.revertido&&inP(p.fecha)),p=>num(p.iva))],
+    ['Líneas de venta con retención de IVA',sum(lineasRet,l=>l.subtotal!=null?num(l.subtotal):num(l.cantidad)*num(l.precioUnitario)),lineasRet.length+' líneas'],
+    ['Cobrado sin IVA (método anterior pagado - iva)',sum(cobP,c=>c.pagado!=null?num(c.pagado)-num(c.iva):num(c.monto??c.cobrado??c.total))]
+  ].map(([concepto,monto,detalle])=>({concepto,monto:r2(monto),detalle:detalle||''}));
   console.log('DIAG · '+PER.label+' ('+PER.desde+' a '+PER.hasta+')');
   console.table(filas);
+  const porConcepto={};
+  gasP.forEach(g=>{
+    const k=String(g.concepto||'').trim().replace(/\s+/g,' ').toUpperCase()||'(sin concepto)';
+    const o=porConcepto[k]=porConcepto[k]||{concepto:k,montoBase:0,iva:0,registros:0};
+    o.montoBase+=g.montoBase!=null?num(g.montoBase):num(g.total??g.monto); o.iva+=num(g.iva); o.registros++;
+  });
+  const gastosFilas=Object.values(porConcepto).sort((a,b)=>b.montoBase-a.montoBase)
+    .map(o=>({concepto:o.concepto,montoBase:r2(o.montoBase),iva:r2(o.iva),registros:o.registros}));
+  gastosFilas.push({concepto:'TOTAL',montoBase:r2(gasBase),iva:r2(gasIva),registros:gasP.length});
+  console.log('DIAG · Gastos por concepto');
+  console.table(gastosFilas);
   return filas;
 };
 
@@ -431,7 +463,7 @@ function rResumen(){
 
   <h2>Flujo del periodo</h2>
   <div class="grid g4">
-    ${kpi('gold','Ventas',fmt$(R.ventasMonto),'Sin IVA · '+fmtN(R.ventasKg)+' kg · IVA neto excluido '+fmt$(R.ivaVentas))}
+    ${kpi('gold','Ventas',fmt$(R.ventasMonto),'Sin IVA · '+fmtN(R.ventasKg)+' kg')}
     ${kpi('blue','Compras de material',fmt$(R.comprasMonto),fmtN(R.comprasKg)+' kg comprados')}
     ${kpi('ok','Cobrado a clientes',fmt$(R.cobrado),'Efectivo que entró · sin IVA')}
     ${kpi('bad','Pagado a proveedores',fmt$(R.pagado),'Efectivo que salió'+(R.anticipos>0?' · incluye anticipos '+fmt$(R.anticipos):'')+(R.gastos?' · + gastos (sin IVA) '+fmt$(R.gastos):''))}
