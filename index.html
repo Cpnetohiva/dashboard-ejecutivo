@@ -165,7 +165,7 @@ const FIREBASE_CONFIG = {
 const COLS = {
   destaraje:'destaraje', cxp:'cuentas_por_pagar', ventas:'ventas',
   cxc:'cuentas_por_cobrar', cobros:'cobros', pagos:'pagos', gastos:'gastos',
-  invIni:'inventario_inicial', inv:'inventario', prod:'control_produccion', precios:'precios'
+  invIni:'inventario_inicial', inv:'inventario', prod:'control_produccion', precios:'precios', flujo:'flujo_movimientos'
 };
 const UNIDAD_PZ = /^(CAJA|TAMBO)/i;           // productos que se venden por pieza
 const SUFIJO_USUARIO = '@everplastic.local';
@@ -325,8 +325,24 @@ function calc(){
   R.cobrado=sum(D.cobros.filter(c=>!c.revertido&&inP(c.fecha)),cobroSinIva);
   R.pagado=sum(D.pagos.filter(p=>!p.revertido&&inP(p.fecha)),p=>num(p.pagado??p.monto??p.total)-num(p.iva||0));
   R.anticipos=sum(D.pagos.filter(p=>!p.revertido&&p.origen==='anticipo'&&inP(p.fecha)),p=>num(p.pagado??p.monto??p.total));
-  R.gastos=sum(D.gastos.filter(g=>inP(g.fecha)),g=>g.montoBase!=null?num(g.montoBase):num(g.total??g.monto));
-  R.flujo=R.cobrado-R.pagado-R.gastos;
+  // Rubros del flujo (los mismos que el módulo Flujo de efectivo): financiamiento u operación; el 'Saldo inicial' se ignora.
+  const montoGasto=g=>g.montoBase!=null?num(g.montoBase):num(g.total??g.monto);
+  const gastosP=D.gastos.filter(g=>inP(g.fecha));
+  R.gastosFin=sum(gastosP.filter(g=>g.tipoGasto==='financiamiento'),montoGasto);
+  R.gastosOp=sum(gastosP.filter(g=>g.tipoGasto!=='financiamiento'),montoGasto);
+  R.gastos=R.gastosOp+R.gastosFin;
+  const tipoNorm=t=>String(t||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toLowerCase();
+  const TIPOS_FIN=['aportacion o prestamo','aportacion de socio','disposicion de credito','retiro o devolucion a socio','retiro de socio'];
+  const TIPOS_ENTRADA=['entrada','otra entrada','anticipo de cliente','aportacion o prestamo','aportacion de socio','disposicion de credito'];
+  const manuales=(D.flujo||[]).filter(m=>inP(m.fecha)&&tipoNorm(m.tipo)!=='saldo inicial');
+  const esEntrada=m=>TIPOS_ENTRADA.includes(tipoNorm(m.tipo));
+  const manFin=manuales.filter(m=>TIPOS_FIN.includes(tipoNorm(m.tipo))), manOp=manuales.filter(m=>!TIPOS_FIN.includes(tipoNorm(m.tipo)));
+  R.financiamientoEntradas=sum(manFin.filter(esEntrada),m=>num(m.importe));
+  R.financiamientoSalidas=sum(manFin.filter(m=>!esEntrada(m)),m=>num(m.importe))+R.gastosFin;
+  R.otrosOperativos=sum(manOp.filter(esEntrada),m=>num(m.importe))-sum(manOp.filter(m=>!esEntrada(m)),m=>num(m.importe));
+  R.flujoOperativo=R.cobrado-R.pagado-R.gastosOp+R.otrosOperativos;
+  R.flujoFinanciamiento=R.financiamientoEntradas-R.financiamientoSalidas;
+  R.flujo=R.flujoOperativo+R.flujoFinanciamiento; // neto de efectivo (operativo + financiamiento)
   // --- Precios vigentes y costo promedio
   const costoProm=grp(D.cxp,c=>norm(c.material),c=>({kg:num(c.kg),m:num(c.total)}));
   R.precioMat=m=>{
@@ -427,6 +443,14 @@ window.DIAG=function(){
     ['Compras CxP',R.comprasMonto],
     ['IVA de pagos',sum(D.pagos.filter(p=>!p.revertido&&inP(p.fecha)),p=>num(p.iva))],
     ['Líneas de venta con retención de IVA',sum(lineasRet,l=>l.subtotal!=null?num(l.subtotal):num(l.cantidad)*num(l.precioUnitario)),lineasRet.length+' líneas'],
+    ['Gastos de operación',R.gastosOp],
+    ['Gastos de financiamiento',R.gastosFin],
+    ['Aportaciones y préstamos',R.financiamientoEntradas],
+    ['Pagos de deuda y retiros',R.financiamientoSalidas,'incluye gastos de financiamiento'],
+    ['Otros operativos',R.otrosOperativos],
+    ['Flujo operativo',R.flujoOperativo],
+    ['Flujo de financiamiento',R.flujoFinanciamiento],
+    ['Flujo neto',R.flujo],
     ['Cobrado sin IVA (método anterior pagado - iva)',sum(cobP,c=>c.pagado!=null?num(c.pagado)-num(c.iva):num(c.monto??c.cobrado??c.total))]
   ].map(([concepto,monto,detalle])=>({concepto,monto:r2(monto),detalle:detalle||''}));
   console.log('DIAG · '+PER.label+' ('+PER.desde+' a '+PER.hasta+')');
@@ -456,24 +480,34 @@ function rResumen(){
   const pe=peCalc(), neto=R.invValor+R.cxcTotal-R.cxpTotal;
   const cls=pe.pe<=0?'blue':pe.cob>=1?'ok':pe.cob>=.7?'warn':'bad';
   $('p-resumen').innerHTML=`
-  <div class="lectura">📌 <b>Lectura rápida · ${esc(PER.label)}:</b> se vendieron <b>${fmt$(R.ventasMonto)}</b> (sin IVA) y se compró material por <b>${fmt$(R.comprasMonto)}</b>.
-  El flujo de efectivo del periodo fue <b class="${R.flujo<0?'neg':'pos'}">${fmt$(R.flujo)}</b> (cobrado sin IVA − pagado − gastos sin IVA).
+  <div class="lectura">📌 <b>Lectura rápida · ${esc(PER.label)}:</b> se vendieron <b>${fmt$(R.ventasMonto)}</b> y se compró material por <b>${fmt$(R.comprasMonto)}</b>.
+  El flujo operativo fue <b class="${R.flujoOperativo<0?'neg':'pos'}">${fmt$(R.flujoOperativo)}</b> (cobrado − pagado − gastos de operación),
+  el de financiamiento <b class="${R.flujoFinanciamiento<0?'neg':'pos'}">${fmt$(R.flujoFinanciamiento)}</b> y el flujo neto de efectivo <b class="${R.flujo<0?'neg':'pos'}">${fmt$(R.flujo)}</b>.
   Hoy <b>debemos ${fmt$(R.cxpTotal)}</b> a proveedores y <b>nos deben ${fmt$(R.cxcTotal)}</b>.
   ${pe.pe>0?`En el mes en curso llevamos <b>${fmtPct(pe.cob*100)}</b> del punto de equilibrio.`:''}</div>
 
   <h2>Flujo del periodo</h2>
+  <h3 style="margin:0 0 8px;font-size:14px;color:var(--navy)">Operación</h3>
   <div class="grid g4">
-    ${kpi('gold','Ventas',fmt$(R.ventasMonto),'Sin IVA · '+fmtN(R.ventasKg)+' kg')}
+    ${kpi('gold','Ventas',fmt$(R.ventasMonto),fmtN(R.ventasKg)+' kg')}
     ${kpi('blue','Compras de material',fmt$(R.comprasMonto),fmtN(R.comprasKg)+' kg comprados')}
-    ${kpi('ok','Cobrado a clientes',fmt$(R.cobrado),'Efectivo que entró · sin IVA')}
-    ${kpi('bad','Pagado a proveedores',fmt$(R.pagado),'Efectivo que salió'+(R.anticipos>0?' · incluye anticipos '+fmt$(R.anticipos):'')+(R.gastos?' · + gastos (sin IVA) '+fmt$(R.gastos):''))}
-    ${kpi(R.flujo<0?'bad':'ok','Flujo neto de efectivo',fmt$(R.flujo),'Cobrado − pagado − gastos')}
+    ${kpi('ok','Cobrado a clientes',fmt$(R.cobrado),'Efectivo que entró')}
+    ${kpi('bad','Pagado a proveedores',fmt$(R.pagado),'Efectivo que salió'+(R.anticipos>0?' · incluye anticipos '+fmt$(R.anticipos):''))}
+    ${kpi('bad','Gastos de operación',fmt$(R.gastosOp),'Efectivo que salió')}
+    ${kpi(R.flujoOperativo<0?'bad':'ok','Flujo operativo',fmt$(R.flujoOperativo),'Cobrado − pagado − gastos'+(Math.abs(R.otrosOperativos)>0.005?' · incluye otros movimientos '+fmt$(R.otrosOperativos):''))}
+  </div>
+  <h3 style="margin:14px 0 8px;font-size:14px;color:var(--navy)">Financiamiento</h3>
+  <div class="grid g4">
+    ${kpi('ok','Aportaciones y préstamos recibidos',fmt$(R.financiamientoEntradas),'Efectivo que entró')}
+    ${kpi('bad','Pagos de deuda y retiros',fmt$(R.financiamientoSalidas),'Efectivo que salió')}
+    ${kpi(R.flujoFinanciamiento<0?'bad':'ok','Flujo de financiamiento',fmt$(R.flujoFinanciamiento),'Recibido − pagado')}
+    ${kpi(R.flujo<0?'bad':'ok','Flujo neto de efectivo',fmt$(R.flujo),'Operativo + financiamiento')}
   </div>
 
   <h2>Situación de hoy</h2>
   <div class="grid g4">
     ${kpi('blue','Inventario valuado',fmt$(R.invValor),fmtN(R.invKg)+' kg en planta')}
-    ${kpi('warn','Nos deben (CxC)',fmt$(R.cxcTotal),R.cxcLista.length+' cuentas abiertas · incluye IVA')}
+    ${kpi('warn','Nos deben (CxC)',fmt$(R.cxcTotal),R.cxcLista.length+' cuentas abiertas')}
     ${kpi('bad','Debemos (CxP)',fmt$(R.cxpTotal),Object.keys(R.cxpProv).length+' proveedores con saldo')}
     ${kpi(neto<0?'bad':'ok','Posición neta',fmt$(neto),'Inventario + CxC − CxP')}
     ${kpi(cls,'Punto de equilibrio',pe.pe>0?fmtPct(pe.cob*100):'—',pe.pe>0?'Meta mensual: '+fmt$(pe.pe):'Captura costos fijos en la pestaña')}
@@ -516,7 +550,7 @@ function rVentas(){
   const cli=Object.entries(porCli).sort((a,b)=>b[1].monto-a[1].monto).slice(0,5);
   const u=m=>R.ventasUnidad[m]==='PZ'?'pz':'kg';
   $('p-ventas').innerHTML=`
-  <div class="lectura">💰 <b>Ventas · ${esc(PER.label)}:</b> <b>${fmt$(R.ventasMonto)}</b> (sin IVA).
+  <div class="lectura">💰 <b>Ventas · ${esc(PER.label)}:</b> <b>${fmt$(R.ventasMonto)}</b>.
   ${rows[0]?`El producto que más vende es <b>${esc(rows[0][0])}</b> con ${fmt$(rows[0][1].monto)} (${fmtPct(rows[0][1].monto/R.ventasMonto*100)}).`:'Sin ventas registradas en el periodo.'}
   ${cli[0]?`Cliente principal: <b>${esc(cli[0][0])}</b> (${fmtPct(cli[0][1].monto/R.ventasMonto*100)}).`:''}</div>
   <div class="grid g2">
@@ -673,7 +707,7 @@ function demoData(){
   const provs=['FELIX LOZANO','ARTURO LARA','JESÚS','GUSTAVO','FRANCISCO','RECICLADOS DEL BAJÍO','MARIO RAMOS'];
   const clientes=['PLASTICOS DEL CENTRO','ENVASES MX','AGRO SAN LUIS','QUÍMICA POTOSINA','DISTRIBUIDORA NORTE'];
   const prods=[['CRISTAL SIN ETIQUETA',13.5,'KG'],['LECHERO MOLIDO',11,'KG'],['POLIETILENO PELETIZADO',17,'KG'],['SUERO',7,'KG'],['CAJA CO30',58,'PZ'],['TAMBO',300,'PZ']];
-  const D={destaraje:[],cxp:[],ventas:[],cxc:[],cobros:[],pagos:[],gastos:[],invIni:[],inv:[],prod:[],precios:[]};
+  const D={destaraje:[],cxp:[],ventas:[],cxc:[],cobros:[],pagos:[],gastos:[],invIni:[],inv:[],prod:[],precios:[],flujo:[]};
   const hoy=new Date(); const d0=n=>iso(new Date(hoy.getTime()-n*86400000));
   mats.forEach(([m,p])=>D.precios.push({material:m,precio:p,fechaInicio:'2026-01-01',fechaFin:null}));
   let tk=1000;
