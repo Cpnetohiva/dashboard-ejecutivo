@@ -120,6 +120,8 @@ details table{margin:0 0 10px 18px;width:calc(100% - 18px)}
         <option value="todo">Todo el histórico</option>
         <option value="rango">Rango de fechas…</option>
       </select>
+      <label class="noprint" style="display:flex;align-items:center;gap:4px;color:#fff;font-size:13px;cursor:pointer"><input type="checkbox" id="chkSocios"> Incluir material de socios</label>
+      <span id="tagSocios" style="display:none;background:#e69500;color:#fff;border-radius:10px;padding:2px 8px;font-size:12px;font-weight:600">sin material de socios</span>
       <span class="rango" id="rangoBox"><input type="date" id="fDesde"><input type="date" id="fHasta"></span>
       <button class="btn ghost" id="btnRef">↻ Actualizar</button>
       <button class="btn ghost" onclick="window.print()">🖨 Imprimir</button>
@@ -183,6 +185,10 @@ const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>'
 const iso = d => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
 const fdate = s => { if(!s) return ''; const p=String(s).slice(0,10).split('-'); return p.length===3?`${p[2]}/${p[1]}/${p[0]}`:s; };
 const norm = s => String(s||'').trim().toUpperCase();
+const PROVEEDORES_SOCIOS = ['GERMAN','MARIO M'];
+const limpiaSocio = s => String(s==null?'':s).normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim().toUpperCase();
+function esProveedorSocio(nombre){ const k=limpiaSocio(nombre); return !!k && PROVEEDORES_SOCIOS.some(s=>limpiaSocio(s)===k); }
+function incluirSocios(){ try{ return localStorage.getItem('dash_incluir_socios')!=='0'; }catch(e){ return true; } }
 const sum = (a,f) => a.reduce((t,x)=>t+f(x),0);
 const MESES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
 const mesLbl = k => MESES[+k.slice(5,7)-1]+' '+k.slice(2,4);
@@ -285,6 +291,7 @@ function calcPeriodo(){
 }
 const inP = f => { f=String(f||'').slice(0,10); return f>=PER.desde && f<=PER.hasta; };
 ['selPeriodo','fDesde','fHasta'].forEach(id=>$(id).onchange=()=>renderAll());
+$('chkSocios').onchange=()=>{ try{ localStorage.setItem('dash_incluir_socios',$('chkSocios').checked?'1':'0'); }catch(e){} renderAll(); };
 
 /* ======================================================================
    CÁLCULOS
@@ -293,7 +300,8 @@ function calc(){
   const D=DB, R={};
   // --- Compras de material (CxP generadas en el periodo)
   const esSI=c=>c.tipo==='saldo_inicial'||(c.aprobacion&&c.aprobacion.tipo==='saldo_inicial');
-  const cxpCompras=D.cxp.filter(c=>!esSI(c)); // saldo inicial no es compra
+  const verSocio=c=>incluirSocios()||!esProveedorSocio(c.proveedor); // interruptor de socios (solo vista)
+  const cxpCompras=D.cxp.filter(c=>!esSI(c)&&verSocio(c)); // saldo inicial no es compra
   const cxpP=cxpCompras.filter(c=>inP(c.fechaTicket));
   R.compras=grp(cxpP,c=>norm(c.material),c=>({kg:num(c.kg),monto:num(c.total)}));
   R.comprasKg=sum(Object.values(R.compras),x=>x.kg); R.comprasMonto=sum(Object.values(R.compras),x=>x.monto);
@@ -367,7 +375,7 @@ function calc(){
   R.invValor=sum(R.inv.filter(x=>x.valor!=null&&x.kg>0),x=>x.valor);
   R.invSinValuar=R.inv.filter(x=>x.valor==null&&x.kg>0).length;
   // --- CxP pendiente
-  const pend=D.cxp.filter(c=>num(c.saldo)>0.01);
+  const pend=D.cxp.filter(c=>num(c.saldo)>0.01&&verSocio(c));
   R.cxpLista=pend; R.cxpTotal=sum(pend,c=>num(c.saldo)); R.cxpSaldoInicial=sum(pend.filter(esSI),c=>num(c.saldo));
   R.cxpProv=grp(pend,c=>c.proveedor||'(sin proveedor)',c=>({saldo:num(c.saldo)}));
   R.cxpProvMat=grp(pend,c=>(c.proveedor||'(sin proveedor)')+'||'+norm(c.material),c=>({saldo:num(c.saldo),kg:num(c.kg)}));
@@ -415,6 +423,8 @@ function peParams(){
 
 let R=null;
 function renderAll(){
+  const chk=$('chkSocios'); if(chk) chk.checked=incluirSocios();
+  const tag=$('tagSocios'); if(tag) tag.style.display=incluirSocios()?'none':'';
   calcPeriodo(); R=calc();
   rResumen(); rMateriales(); rVentas(); rInventario(); rCxP(); rCxC(); rPE();
 }
