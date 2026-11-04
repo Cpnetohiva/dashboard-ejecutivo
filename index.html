@@ -292,7 +292,9 @@ const inP = f => { f=String(f||'').slice(0,10); return f>=PER.desde && f<=PER.ha
 function calc(){
   const D=DB, R={};
   // --- Compras de material (CxP generadas en el periodo)
-  const cxpP=D.cxp.filter(c=>inP(c.fechaTicket));
+  const esSI=c=>c.tipo==='saldo_inicial'||(c.aprobacion&&c.aprobacion.tipo==='saldo_inicial');
+  const cxpCompras=D.cxp.filter(c=>!esSI(c)); // saldo inicial no es compra
+  const cxpP=cxpCompras.filter(c=>inP(c.fechaTicket));
   R.compras=grp(cxpP,c=>norm(c.material),c=>({kg:num(c.kg),monto:num(c.total)}));
   R.comprasKg=sum(Object.values(R.compras),x=>x.kg); R.comprasMonto=sum(Object.values(R.compras),x=>x.monto);
   R.kgBascula=sum(D.destaraje.filter(r=>inP(r.fechaSalida||r.fechaEntrada)),r=>num(r.kg));
@@ -344,7 +346,7 @@ function calc(){
   R.flujoFinanciamiento=R.financiamientoEntradas-R.financiamientoSalidas;
   R.flujo=R.flujoOperativo+R.flujoFinanciamiento; // neto de efectivo (operativo + financiamiento)
   // --- Precios vigentes y costo promedio
-  const costoProm=grp(D.cxp,c=>norm(c.material),c=>({kg:num(c.kg),m:num(c.total)}));
+  const costoProm=grp(cxpCompras,c=>norm(c.material),c=>({kg:num(c.kg),m:num(c.total)}));
   R.precioMat=m=>{
     const ps=D.precios.filter(p=>norm(p.material)===m&&String(p.fechaInicio)<=HOY&&(!p.fechaFin||String(p.fechaFin)>=HOY)).sort((a,b)=>String(b.fechaInicio).localeCompare(String(a.fechaInicio)));
     if(ps.length) return num(ps[0].precio);
@@ -366,7 +368,7 @@ function calc(){
   R.invSinValuar=R.inv.filter(x=>x.valor==null&&x.kg>0).length;
   // --- CxP pendiente
   const pend=D.cxp.filter(c=>num(c.saldo)>0.01);
-  R.cxpLista=pend; R.cxpTotal=sum(pend,c=>num(c.saldo));
+  R.cxpLista=pend; R.cxpTotal=sum(pend,c=>num(c.saldo)); R.cxpSaldoInicial=sum(pend.filter(esSI),c=>num(c.saldo));
   R.cxpProv=grp(pend,c=>c.proveedor||'(sin proveedor)',c=>({saldo:num(c.saldo)}));
   R.cxpProvMat=grp(pend,c=>(c.proveedor||'(sin proveedor)')+'||'+norm(c.material),c=>({saldo:num(c.saldo),kg:num(c.kg)}));
   R.cxpMat=grp(pend,c=>norm(c.material),c=>({saldo:num(c.saldo)}));
@@ -383,7 +385,7 @@ function calc(){
   const meses=[]; const t=new Date(); for(let i=5;i>=0;i--){const d=new Date(t.getFullYear(),t.getMonth()-i,1); meses.push(iso(d).slice(0,7));}
   R.meses=meses;
   R.serieVentas=meses.map(k=>sum(D.ventas.filter(v=>String(v.fecha).slice(0,7)===k),v=>sum(v.lineas||[],l=>l.subtotal!=null?num(l.subtotal):num(l.cantidad)*num(l.precioUnitario))));
-  R.serieCompras=meses.map(k=>sum(D.cxp.filter(c=>String(c.fechaTicket).slice(0,7)===k),c=>num(c.total)));
+  R.serieCompras=meses.map(k=>sum(cxpCompras.filter(c=>String(c.fechaTicket).slice(0,7)===k),c=>num(c.total)));
   // --- Punto de equilibrio
   const fijo=g=>/fij/i.test(String(g.clasificacion||g.tipo||g.tipoCosto||g.categoriaCosto||''));
   const gf=D.gastos.filter(fijo);
@@ -608,7 +610,7 @@ function rCxP(){
   }
   const vencido=R.cxpAging[3].v+R.cxpAging[2].v;
   $('p-cxp').innerHTML=`
-  <div class="lectura">🏭 <b>Cuentas por pagar al día de hoy:</b> debemos <b>${fmt$(R.cxpTotal)}</b> a <b>${provs.length}</b> proveedores.
+  <div class="lectura">🏭 <b>Cuentas por pagar al día de hoy:</b> debemos <b>${fmt$(R.cxpTotal)}</b> a <b>${provs.length}</b> proveedores.${R.cxpSaldoInicial>0?` <small>(de los cuales saldo inicial: <b>${fmt$(R.cxpSaldoInicial)}</b>)</small>`:''}
   ${top?`El mayor saldo es con <b>${esc(top[0])}</b> (${fmt$(top[1].saldo)}, ${fmtPct(top[1].saldo/R.cxpTotal*100)}).`:''}
   ${vencido>0?`<b>${fmt$(vencido)}</b> tienen más de 15 días de antigüedad.`:''}</div>
   <div class="grid g2">
