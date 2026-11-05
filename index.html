@@ -76,6 +76,7 @@ details table{margin:0 0 10px 18px;width:calc(100% - 18px)}
 .rm-imp-head{display:none}
 @page{size:letter portrait;margin:1.2cm}
 @media print{
+  [hidden]{display:none!important}
   header .btn,nav,.noprint,button{display:none!important}
   header,nav{position:static}
   .panel{display:block!important;page-break-inside:avoid}
@@ -204,6 +205,17 @@ const COLS = {
 };
 const UNIDAD_PZ = /^(CAJA|TAMBO)/i;           // productos que se venden por pieza
 const SUFIJO_USUARIO = '@everplastic.local';
+// Interruptor del inventario: en false se oculta la pestaña, su panel y toda cifra de inventario del tablero. El código y calc() se conservan.
+const MOSTRAR_INVENTARIO = false;
+// Colecciones que solo alimentan el inventario (calc() las usa únicamente en el cálculo de inventario y en R.precioMat, que solo valúa inventario).
+// Con el interruptor en false no se leen: DB[k]=[] y sin aviso de colección no leída. 'destaraje' NO está aquí: R.kgBascula (Materiales) la usa.
+const COLS_SOLO_INVENTARIO = ['invIni','inv','prod','precios'];
+const omitirLectura = k => !MOSTRAR_INVENTARIO && COLS_SOLO_INVENTARIO.includes(k);
+if(!MOSTRAR_INVENTARIO){
+  const bi=document.querySelector('nav button[data-p="inventario"]'), pi=document.getElementById('p-inventario');
+  if(bi) bi.hidden=true;
+  if(pi) pi.hidden=true;
+}
 
 /* ======================================================================
    UTILIDADES
@@ -297,10 +309,11 @@ async function cargarYRender(){
   if(DEMO){ DB=demoData(); COL_FALLAS=['proveedores','clientes']; $('warns').innerHTML=''; }
   else{
     const keys=Object.keys(COLS);
-    const res=await Promise.allSettled(keys.map(k=>db.collection(COLS[k]).get()));
+    const res=await Promise.allSettled(keys.map(k=>omitirLectura(k)?Promise.resolve(null):db.collection(COLS[k]).get()));
     DB={}; const fails=[];
     res.forEach((r,i)=>{
       const k=keys[i];
+      if(omitirLectura(k)){ DB[k]=[]; return; }
       if(r.status==='fulfilled') DB[k]=r.value.docs.map(d=>({id:d.id,...d.data()}));
       else{ DB[k]=[]; fails.push(COLS[k]); }
     });
@@ -727,10 +740,10 @@ function rReporteMensual(){
   html+=`<h2>2 · Material: entradas vs salidas</h2>
   <div style="margin-bottom:10px"><span class="pill ${socios?'ok':'warn'}">Material de socios: ${socios?'incluido':'excluido'}</span>
     <span class="note" style="display:inline;margin-left:8px">${socios?'Las compras de GERMAN y MARIO M cuentan como entradas.':'Las compras de GERMAN y MARIO M no cuentan como entradas.'} Se cambia con «Incluir material de socios» en la parte superior.</span></div>
-  <div class="card"><table><thead><tr><th>Material</th><th class="n">Entradas kg</th><th class="n">Entradas $</th><th class="n">Salidas kg</th><th class="n">Salidas pzas</th><th class="n">Salidas $</th><th class="n">Dif. kg</th><th class="n">Dif. $</th></tr></thead><tbody>
+  <div class="card"><table><thead><tr><th>Material</th><th class="n">Entradas kg</th><th class="n">Entradas $</th><th class="n">Salidas kg</th><th class="n">Salidas pzas</th><th class="n">Salidas $</th><th class="n" style="white-space:normal;min-width:84px">Diferencia (compras - ventas del mes) kg</th><th class="n" style="white-space:normal;min-width:84px">Diferencia (compras - ventas del mes) $</th></tr></thead><tbody>
   ${filas.map(x=>`<tr><td>${esc(x.k)}</td>${fila(x)}</tr>`).join('')||'<tr><td colspan="8" class="note">Sin compras ni ventas de material en el mes</td></tr>'}
   <tr class="tot"><td>TOTAL</td>${fila(T)}</tr></tbody></table>
-  <div class="note">Entradas = compras de CxP del mes (por fecha de ticket). Salidas = ventas del mes. Diferencia = entradas − salidas. Son montos de material, no efectivo: lo cobrado y lo pagado en el mes está en el Bloque 1.</div></div>`;
+  <div class="note">Montos de material, no efectivo. No representa variación de inventario.</div></div>`;
   html+=rmBloqueCxP(desde,hasta,Rm);
   html+=rmBloqueCxC(desde,hasta,Rm);
   cuerpo.innerHTML=html;
@@ -753,7 +766,7 @@ function renderAll(){
   const chk=$('chkSocios'); if(chk) chk.checked=incluirSocios();
   const tag=$('tagSocios'); if(tag) tag.style.display=incluirSocios()?'none':'';
   calcPeriodo(); R=calc();
-  rResumen(); rMateriales(); rVentas(); rInventario(); rCxP(); rCxC(); rPE();
+  rResumen(); rMateriales(); rVentas(); if(MOSTRAR_INVENTARIO) rInventario(); rCxP(); rCxC(); rPE();
   try{ rReporteMensual(); }catch(e){ const c=$('rmCuerpo'); if(c) c.innerHTML='<div class="warnbar">No se pudo armar el reporte mensual: '+esc(e.message)+'</div>'; }
 }
 
@@ -818,7 +831,7 @@ function peCalc(){
   return {cf,mc,pe,ventasMes,cob:pe>0?ventasMes/pe:0,km};
 }
 function rResumen(){
-  const pe=peCalc(), neto=R.invValor+R.cxcTotal-R.cxpTotal;
+  const pe=peCalc(), neto=(MOSTRAR_INVENTARIO?R.invValor:0)+R.cxcTotal-R.cxpTotal;
   const cls=pe.pe<=0?'blue':pe.cob>=1?'ok':pe.cob>=.7?'warn':'bad';
   $('p-resumen').innerHTML=`
   <div class="lectura">📌 <b>Lectura rápida · ${esc(PER.label)}:</b> se vendieron <b>${fmt$(R.ventasMonto)}</b> y se compró material por <b>${fmt$(R.comprasMonto)}</b>.
@@ -854,16 +867,16 @@ function rResumen(){
 
   <h2>Situación de hoy</h2>
   <div class="grid g4">
-    ${kpi('blue','Inventario valuado',fmt$(R.invValor),fmtN(R.invKg)+' kg en planta')}
+    ${MOSTRAR_INVENTARIO?kpi('blue','Inventario valuado',fmt$(R.invValor),fmtN(R.invKg)+' kg en planta'):''}
     ${kpi('warn','Nos deben (CxC)',fmt$(R.cxcTotal),R.cxcLista.length+' cuentas abiertas')}
     ${kpi('bad','Debemos (CxP)',fmt$(R.cxpTotal),Object.keys(R.cxpProv).length+' proveedores con saldo')}
-    ${kpi(neto<0?'bad':'ok','Posición neta',fmt$(neto),'Inventario + CxC − CxP')}
+    ${MOSTRAR_INVENTARIO?kpi(neto<0?'bad':'ok','Posición neta',fmt$(neto),'Inventario + CxC − CxP'):kpi(neto<0?'bad':'ok','Cuentas netas (CxC - CxP)',fmt$(R.cxcTotal-R.cxpTotal),'Nos deben menos debemos')}
     ${kpi(cls,'Punto de equilibrio',pe.pe>0?fmtPct(pe.cob*100):'—',pe.pe>0?'Meta mensual: '+fmt$(pe.pe):'Captura costos fijos en la pestaña')}
   </div>
 
   <h2>Tendencia últimos 6 meses</h2>
   <div class="card"><div class="chartbox"><canvas id="chTend"></canvas></div>
-  <div class="note">Barras: ventas vs. compras de material cada mes. Si las compras superan a las ventas, se está acumulando inventario o hay margen comprimido.</div></div>`;
+  <div class="note">Barras: ventas vs. compras de material cada mes. ${MOSTRAR_INVENTARIO?'Si las compras superan a las ventas, se está acumulando inventario o hay margen comprimido.':'Si las compras superan a las ventas del mes, el margen del mes está comprimido.'}</div></div>`;
   chart('chTend',{type:'bar',data:{labels:R.meses.map(mesLbl),datasets:[
     {label:'Ventas',data:R.serieVentas,backgroundColor:C_GOLD},
     {label:'Compras de material',data:R.serieCompras,backgroundColor:C_NAVY}]},
