@@ -73,7 +73,31 @@ details table{margin:0 0 10px 18px;width:calc(100% - 18px)}
 .pe-in{display:flex;gap:16px;flex-wrap:wrap;align-items:end}
 .pe-in label{font-size:12px;font-weight:700;color:var(--mut);display:block;margin-bottom:4px;text-transform:uppercase}
 @media(max-width:640px){.kpi .val{font-size:22px}nav{top:92px}}
-@media print{header .btn,nav,.noprint{display:none}header,nav{position:static}.panel{display:block!important;page-break-inside:avoid}body.imp-reporte .panel:not(#p-reporte),body.imp-reporte header,body.imp-reporte #warns{display:none!important}}
+.rm-imp-head{display:none}
+@page{size:letter portrait;margin:1.2cm}
+@media print{
+  header .btn,nav,.noprint,button{display:none!important}
+  header,nav{position:static}
+  .panel{display:block!important;page-break-inside:avoid}
+  body{background:#fff;font-size:12px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  /* Reporte mensual: solo el reporte, sin controles globales (nav, selector de periodo, botones) */
+  body.imp-reporte .panel:not(#p-reporte),body.imp-reporte header,body.imp-reporte nav,body.imp-reporte #warns{display:none!important}
+  body.imp-reporte main{max-width:none;margin:0;padding:0}
+  #p-reporte .rm-imp-head{display:block;font-size:17px;font-weight:700;color:var(--navy);border-bottom:3px solid var(--gold);padding-bottom:6px;margin-bottom:12px}
+  #p-reporte .card{box-shadow:none;border:1px solid var(--line);break-inside:avoid;page-break-inside:avoid}
+  #p-reporte .grid{grid-template-columns:repeat(3,1fr);break-inside:avoid}
+  #p-reporte .lectura,#p-reporte .warnbar,#p-reporte .note{break-inside:avoid}
+  #p-reporte h2{break-after:avoid;page-break-after:avoid}
+  #p-reporte h2:not(:first-of-type){break-before:page;page-break-before:always}
+  #p-reporte h3{break-after:avoid;page-break-after:avoid}
+  #p-reporte table{width:100%;max-width:100%;table-layout:auto;font-size:10.5px;break-inside:avoid;page-break-inside:avoid}
+  #p-reporte th,#p-reporte td{padding:4px 5px;overflow-wrap:anywhere}
+  #p-reporte th{font-size:9.5px;letter-spacing:.2px}
+  #p-reporte td.n,#p-reporte th.n{white-space:nowrap}
+  #p-reporte thead{display:table-header-group}
+  #p-reporte tr{break-inside:avoid;page-break-inside:avoid}
+  #p-reporte .kpi .val{font-size:17px}
+}
 </style>
 </head>
 <body>
@@ -175,7 +199,8 @@ const FIREBASE_CONFIG = {
 const COLS = {
   destaraje:'destaraje', cxp:'cuentas_por_pagar', ventas:'ventas',
   cxc:'cuentas_por_cobrar', cobros:'cobros', pagos:'pagos', gastos:'gastos',
-  invIni:'inventario_inicial', inv:'inventario', prod:'control_produccion', precios:'precios', flujo:'flujo_movimientos'
+  invIni:'inventario_inicial', inv:'inventario', prod:'control_produccion', precios:'precios', flujo:'flujo_movimientos',
+  proveedores:'proveedores', clientes:'clientes'
 };
 const UNIDAD_PZ = /^(CAJA|TAMBO)/i;           // productos que se venden por pieza
 const SUFIJO_USUARIO = '@everplastic.local';
@@ -269,7 +294,7 @@ async function arrancar(){
    ====================================================================== */
 async function cargarYRender(){
   $('warns').innerHTML='<div class="warnbar">Cargando datos…</div>';
-  if(DEMO){ DB=demoData(); $('warns').innerHTML=''; }
+  if(DEMO){ DB=demoData(); COL_FALLAS=['proveedores','clientes']; $('warns').innerHTML=''; }
   else{
     const keys=Object.keys(COLS);
     const res=await Promise.allSettled(keys.map(k=>db.collection(COLS[k]).get()));
@@ -279,6 +304,7 @@ async function cargarYRender(){
       if(r.status==='fulfilled') DB[k]=r.value.docs.map(d=>({id:d.id,...d.data()}));
       else{ DB[k]=[]; fails.push(COLS[k]); }
     });
+    COL_FALLAS=fails;
     $('warns').innerHTML = fails.length?`<div class="warnbar">⚠️ No se pudieron leer estas colecciones (permisos o nombre distinto): <b>${fails.join(', ')}</b>. Los números que dependen de ellas aparecerán en cero.</div>`:'';
   }
   renderAll();
@@ -453,6 +479,178 @@ function rmTablaRubro(titulo,filas){
   return {e,s,html:`<div class="card" style="margin-bottom:14px"><h3>${esc(titulo)}</h3><table><thead><tr><th>Concepto</th><th class="n">Entradas</th><th class="n">Salidas</th><th class="n">Neto</th></tr></thead><tbody>${cuerpo}<tr class="tot"><td>Flujo ${esc(titulo.toLowerCase())}</td><td class="n">${rmM(e)}</td><td class="n">${rmM(s)}</td><td class="n ${e-s<0?'neg':'pos'}">${rmM(e-s)}</td></tr></tbody></table></div>`};
 }
 
+/* ======================================================================
+   CxP AL CORTE (reconstruida con abonos y fechas, NO con el campo saldo de hoy)
+   saldo(c, C) = total - suma de abonos vigentes al corte C, para cuentas con fechaTicket <= C.
+   Abono vigente en C: fecha <= C y, si fue revertido, fechaReversion > C. Los precios de material no manejan IVA: total tal cual.
+   ====================================================================== */
+let COL_FALLAS=[]; // colecciones que no se pudieron leer en la última carga
+const verSocioG=c=>incluirSocios()||!esProveedorSocio(c.proveedor); // mismo interruptor que calc()
+const dia10=f=>String(f||'').slice(0,10);
+const diaAnterior=f=>{ const [y,m,d]=f.split('-').map(Number); return iso(new Date(y,m-1,d-1)); };
+const esSaldoInicialCta=c=>c.tipo==='saldo_inicial'||(c.aprobacion&&c.aprobacion.tipo==='saldo_inicial');
+function abonosVigentesAl(c,C,campoFecha){
+  if(dia10(c[campoFecha])>C) return [];
+  const act=(a,rev)=>dia10(a.fecha)<=C && !(rev && dia10(a.fechaReversion)<=C);
+  return (c.abonos||[]).filter(a=>act(a,false)).concat((c.abonosRevertidos||[]).filter(a=>act(a,true)));
+}
+function cxpAlCorteDet(C){
+  const filas=(DB.cxp||[]).filter(verSocioG).filter(c=>dia10(c.fechaTicket)<=C).map(c=>({c,saldo:num(c.total)-sum(abonosVigentesAl(c,C,'fechaTicket'),a=>num(a.monto))}));
+  return {filas, todo:sum(filas,f=>f.saldo), total:sum(filas.filter(f=>f.saldo>0.01),f=>f.saldo)};
+}
+function saldoCxpAlCorte(C){ return cxpAlCorteDet(C).total; }
+
+// Autoprueba (solo consola): el saldo reconstruido a hoy debe igualar R.cxpTotal con el mismo estado del interruptor de socios.
+function autopruebaCxP(){
+  if(!R||!DB||!DB.cxp) return;
+  const det=cxpAlCorteDet(HOY), dif=det.total-R.cxpTotal;
+  if(Math.abs(dif)<=0.5){ console.info('Autoprueba CxP OK: saldoCxpAlCorte(HOY) = R.cxpTotal = '+fmt$2(R.cxpTotal)); return; }
+  console.warn('Autoprueba CxP: saldoCxpAlCorte(HOY) '+fmt$2(det.total)+' ≠ R.cxpTotal '+fmt$2(R.cxpTotal)+' · diferencia '+fmt$2(dif));
+  const ef=x=>x>0.01?x:0, calc_=new Map(det.filas.map(f=>[f.c,f.saldo]));
+  const difs=(DB.cxp||[]).filter(verSocioG).map(c=>{ const k=ef(calc_.get(c)||0), h=ef(num(c.saldo)); return {id:c.id,proveedor:c.proveedor,ticket:c.ticket,fechaTicket:dia10(c.fechaTicket),total:num(c.total),reconstruido:k,campoSaldo:h,diferencia:Math.round((k-h)*100)/100}; })
+    .filter(x=>Math.abs(x.diferencia)>0.005).sort((a,b)=>Math.abs(b.diferencia)-Math.abs(a.diferencia)).slice(0,5);
+  console.table(difs);
+}
+
+// Bloque 3 del reporte mensual: roll-forward de CxP del mes [desde, hasta]. Rm = calc() del mes.
+function rmBloqueCxP(desde,hasta,Rm){
+  const ini=diaAnterior(desde), Di=cxpAlCorteDet(ini), Df=cxpAlCorteDet(hasta);
+  const cuentas=(DB.cxp||[]).filter(verSocioG);
+  const delMes=cuentas.filter(c=>{ const f=dia10(c.fechaTicket); return f>=desde&&f<=hasta; });
+  const compras=sum(delMes.filter(c=>!esSaldoInicialCta(c)),c=>num(c.total));
+  const siSis=delMes.filter(esSaldoInicialCta), siSisM=sum(siSis,c=>num(c.total));
+  // Abonos del mes = vigentes al cierre y no vigentes al inicio; reversiones = vigentes al inicio y ya no al cierre. Así el puente es exacto.
+  let abEf=0, abSaf=0, rev=0;
+  cuentas.forEach(c=>{
+    const aIni=new Set(abonosVigentesAl(c,ini,'fechaTicket')), aFin=abonosVigentesAl(c,hasta,'fechaTicket'), sFin=new Set(aFin);
+    aFin.forEach(a=>{ if(aIni.has(a)) return; if(/saldo a favor/i.test(String(a.referencia||''))) abSaf+=num(a.monto); else abEf+=num(a.monto); });
+    aIni.forEach(a=>{ if(!sFin.has(a)) rev+=num(a.monto); });
+  });
+  const final=Df.todo, calculado=Di.todo+compras+siSisM-abEf-abSaf+rev;
+  const socios=incluirSocios();
+  const conIva=delMes.filter(c=>num(c.iva)!==0).length;
+  const avisos=[];
+  if(conIva>0) avisos.push(`${conIva} cuenta${conIva===1?'':'s'} del periodo ${conIva===1?'trae':'traen'} IVA distinto de 0. El reporte usa el total tal cual (los precios de material no manejan IVA); revísalas.`);
+  if(Math.abs(calculado-final)>0.5) avisos.push(`El puente no cuadra por ${rmM(calculado-final)}: revisa cuentas con fechas o abonos incompletos.`);
+  if(Math.abs(compras-Rm.comprasMonto)>0.5) avisos.push(`Las compras del mes aquí (${rmM(compras)}) no coinciden con las compras del tablero (${rmM(Rm.comprasMonto)}); diferencia ${rmM(compras-Rm.comprasMonto)}.`);
+  if(Math.abs(Df.todo-Df.total)>0.5) avisos.push(`El saldo final incluye ${rmM(Df.todo-Df.total)} de cuentas con saldo negativo o menor a un centavo; el top las deja fuera.`);
+  avisos.forEach(a=>{ if(/no coinciden|no cuadra/.test(a)) console.warn('Reporte mensual CxP: '+a); });
+
+  const prov=grp(Df.filas.filter(f=>f.saldo>0.01),f=>f.c.proveedor||'(sin proveedor)',f=>({saldo:f.saldo}));
+  const top=Object.entries(prov).sort((a,b)=>b[1].saldo-a[1].saldo), totalTop=sum(top,x=>x[1].saldo);
+  const visibles=top.slice(0,10), resto=top.slice(10);
+  const filasTop=visibles.map(([p,x])=>`<tr><td>${esc(p)}</td><td class="n">${rmM(x.saldo)}</td><td class="n">${fmtPct(totalTop>0?x.saldo/totalTop*100:0)}</td></tr>`).join('')
+    +(resto.length?`<tr><td>Otros proveedores (${resto.length})</td><td class="n">${rmM(sum(resto,x=>x[1].saldo))}</td><td class="n">${fmtPct(totalTop>0?sum(resto,x=>x[1].saldo)/totalTop*100:0)}</td></tr>`:'');
+
+  const legible=!COL_FALLAS.includes('proveedores') && Array.isArray(DB.proveedores);
+  const saf=legible?sum(DB.proveedores.filter(p=>verSocioG({proveedor:p.nombre||p.id})),p=>sum((p.saldoAFavor||[]).filter(m=>!m.revertido&&dia10(m.fecha)<=hasta),m=>num(m.monto))):null;
+  const bloqueSaf=legible
+    ?`<table><tbody><tr><td>Saldo CxP al ${fdate(hasta)}</td><td class="n">${rmM(Df.total)}</td></tr>
+      <tr><td>Saldo a favor de proveedores (anticipos) al ${fdate(hasta)}</td><td class="n">${rmM(saf)}</td></tr>
+      <tr class="tot"><td>Exposición neta</td><td class="n">${rmM(Df.total-saf)}</td></tr></tbody></table>
+      <div class="note">Exposición neta = saldo CxP − saldo a favor. El saldo a favor suma los movimientos no revertidos con fecha hasta el corte; los movimientos revertidos no guardan fecha de reversión y se excluyen en todos los cortes.</div>`
+    :`<div class="note">No se pudo leer la colección «proveedores» (permisos o nombre distinto): el saldo a favor y la exposición neta no están disponibles. El resto del bloque no depende de ella.</div>`;
+
+  return `<h2>3 · Cuentas por pagar (CxP)</h2>
+  <div style="margin-bottom:10px"><span class="pill ${socios?'ok':'warn'}">Material de socios: ${socios?'incluido':'excluido'}</span>
+    <span class="note" style="display:inline;margin-left:8px">Roll-forward con abonos y fechas, no con el campo saldo de hoy. Se usa el total de cada cuenta tal cual.</span></div>
+  ${avisos.map(a=>`<div class="warnbar">${esc(a)}</div>`).join('')}
+  <div class="card" style="margin-bottom:14px"><table><thead><tr><th>Concepto</th><th class="n">Importe</th></tr></thead><tbody>
+    <tr><td>Saldo inicial (al ${fdate(ini)})</td><td class="n">${rmM(Di.todo)}</td></tr>
+    <tr><td>+ Compras del mes</td><td class="n">${rmM(compras)}</td></tr>
+    ${siSis.length?`<tr><td>+ Saldo inicial del sistema<div class="note" style="margin:0">${siSis.length} cuenta${siSis.length===1?'':'s'} tipo saldo inicial con fecha dentro del mes</div></td><td class="n">${rmM(siSisM)}</td></tr>`:''}
+    <tr><td>− Abonos del mes en efectivo</td><td class="n">${rmM(-abEf)}</td></tr>
+    <tr><td>− Abonos del mes con saldo a favor aplicado</td><td class="n">${rmM(-abSaf)}</td></tr>
+    ${Math.abs(rev)>0.005?`<tr><td>+ Abonos revertidos en el mes<div class="note" style="margin:0">Abonos de meses anteriores que se revirtieron dentro de este mes</div></td><td class="n">${rmM(rev)}</td></tr>`:''}
+    <tr class="tot"><td>= Saldo final (al ${fdate(hasta)})</td><td class="n">${rmM(final)}</td></tr></tbody></table></div>
+  <div class="card" style="margin-bottom:14px"><h3>Top de proveedores por saldo al ${fdate(hasta)}</h3><table><thead><tr><th>Proveedor</th><th class="n">Saldo</th><th class="n">% del total</th></tr></thead><tbody>
+    ${filasTop||'<tr><td colspan="3" class="note">Sin saldos pendientes al corte</td></tr>'}
+    <tr class="tot"><td>TOTAL</td><td class="n">${rmM(totalTop)}</td><td class="n">100%</td></tr></tbody></table>
+    <div style="margin-top:12px">${bloqueSaf}</div></div>`;
+}
+
+/* ======================================================================
+   CxC AL CORTE (misma lógica que CxP, con fechaVenta; no usa el campo saldo de hoy)
+   saldo(c, C) = total - abonos vigentes al corte C, para cuentas con fechaVenta <= C. Sin IVA aparte: total tal cual.
+   ====================================================================== */
+function abonosCxcAl(c,C){
+  if(dia10(c.fechaVenta||c.fecha)>C) return [];
+  const act=(a,rev)=>dia10(a.fecha)<=C && !(rev && dia10(a.fechaReversion)<=C);
+  return (c.abonos||[]).filter(a=>act(a,false)).concat((c.abonosRevertidos||[]).filter(a=>act(a,true)));
+}
+function cxcAlCorteDet(C){
+  const filas=(DB.cxc||[]).filter(c=>dia10(c.fechaVenta||c.fecha)<=C).map(c=>({c,saldo:num(c.total)-sum(abonosCxcAl(c,C),a=>num(a.monto))}));
+  return {filas, todo:sum(filas,f=>f.saldo), total:sum(filas.filter(f=>f.saldo>0.01),f=>f.saldo)};
+}
+function saldoCxcAlCorte(C){ return cxcAlCorteDet(C).total; }
+
+// Autoprueba (solo consola): el saldo reconstruido a hoy debe igualar R.cxcTotal.
+function autopruebaCxC(){
+  if(!R||!DB||!DB.cxc) return;
+  const det=cxcAlCorteDet(HOY), dif=det.total-R.cxcTotal;
+  if(Math.abs(dif)<=0.5){ console.info('Autoprueba CxC OK: saldoCxcAlCorte(HOY) = R.cxcTotal = '+fmt$2(R.cxcTotal)); return; }
+  console.warn('Autoprueba CxC: saldoCxcAlCorte(HOY) '+fmt$2(det.total)+' ≠ R.cxcTotal '+fmt$2(R.cxcTotal)+' · diferencia '+fmt$2(dif));
+  const ef=x=>x>0.01?x:0, calc_=new Map(det.filas.map(f=>[f.c,f.saldo]));
+  const difs=(DB.cxc||[]).map(c=>{ const k=ef(calc_.get(c)||0), h=ef(R.sCxc(c)); return {id:c.id,cliente:c.cliente,folio:c.folio,fechaVenta:dia10(c.fechaVenta||c.fecha),total:num(c.total),reconstruido:k,campoSaldo:h,diferencia:Math.round((k-h)*100)/100}; })
+    .filter(x=>Math.abs(x.diferencia)>0.005).sort((a,b)=>Math.abs(b.diferencia)-Math.abs(a.diferencia)).slice(0,5);
+  console.table(difs);
+}
+
+// Bloque 4 del reporte mensual: roll-forward de CxC del mes [desde, hasta]. Rm = calc() del mes.
+function rmBloqueCxC(desde,hasta,Rm){
+  const ini=diaAnterior(desde), Di=cxcAlCorteDet(ini), Df=cxcAlCorteDet(hasta);
+  const cuentas=DB.cxc||[];
+  const delMes=cuentas.filter(c=>{ const f=dia10(c.fechaVenta||c.fecha); return f>=desde&&f<=hasta; });
+  const generado=sum(delMes,c=>num(c.total));
+  let cobEf=0, cobSaf=0, rev=0;
+  cuentas.forEach(c=>{
+    const aIni=new Set(abonosCxcAl(c,ini)), aFin=abonosCxcAl(c,hasta), sFin=new Set(aFin);
+    aFin.forEach(a=>{ if(aIni.has(a)) return; if(/saldo a favor/i.test(String(a.referencia||''))) cobSaf+=num(a.monto); else cobEf+=num(a.monto); });
+    aIni.forEach(a=>{ if(!sFin.has(a)) rev+=num(a.monto); });
+  });
+  const final=Df.todo, calculado=Di.todo+generado-cobEf-cobSaf+rev;
+  // Cobros del mes ligados a una cuenta (cxcId) y no revertidos: deben coincidir con los abonos en efectivo.
+  const cobLig=sum((DB.cobros||[]).filter(k=>!k.revertido&&k.cxcId&&dia10(k.fecha)>=desde&&dia10(k.fecha)<=hasta),k=>num(k.pagado));
+  const conIva=delMes.filter(c=>num(c.ivaTrasladado)!==0||num(c.ivaRetenido)!==0).length;
+  const avisos=[];
+  if(conIva>0) avisos.push(`${conIva} cuenta${conIva===1?'':'s'} del periodo ${conIva===1?'trae':'traen'} IVA trasladado o retenido distinto de 0. El reporte usa el total tal cual, sin prorrateos; revísalas.`);
+  if(Math.abs(calculado-final)>0.5) avisos.push(`El puente no cuadra por ${rmM(calculado-final)}: revisa cuentas con fechas o abonos incompletos.`);
+  if(Math.abs(generado-Rm.ventasMonto)>0.5) avisos.push(`Lo generado en el mes (${rmM(generado)}) no coincide con las ventas del tablero (${rmM(Rm.ventasMonto)}); diferencia ${rmM(generado-Rm.ventasMonto)}.`);
+  if(Math.abs(cobEf-cobLig)>0.5) avisos.push(`Los abonos en efectivo del mes (${rmM(cobEf)}) no coinciden con los cobros ligados por cxcId (${rmM(cobLig)}); diferencia ${rmM(cobEf-cobLig)}.`);
+  if(Math.abs(Df.todo-Df.total)>0.5) avisos.push(`El saldo final incluye ${rmM(Df.todo-Df.total)} de cuentas con saldo negativo o menor a un centavo; el top las deja fuera.`);
+  avisos.forEach(a=>{ if(/no coincid|no cuadra/.test(a)) console.warn('Reporte mensual CxC: '+a); });
+
+  const cli=grp(Df.filas.filter(f=>f.saldo>0.01),f=>f.c.cliente||'(sin cliente)',f=>({saldo:f.saldo}));
+  const top=Object.entries(cli).sort((a,b)=>b[1].saldo-a[1].saldo), totalTop=sum(top,x=>x[1].saldo);
+  const visibles=top.slice(0,10), resto=top.slice(10);
+  const filasTop=visibles.map(([p,x])=>`<tr><td>${esc(p)}</td><td class="n">${rmM(x.saldo)}</td><td class="n">${fmtPct(totalTop>0?x.saldo/totalTop*100:0)}</td></tr>`).join('')
+    +(resto.length?`<tr><td>Otros clientes (${resto.length})</td><td class="n">${rmM(sum(resto,x=>x[1].saldo))}</td><td class="n">${fmtPct(totalTop>0?sum(resto,x=>x[1].saldo)/totalTop*100:0)}</td></tr>`:'');
+
+  const legible=!COL_FALLAS.includes('clientes') && Array.isArray(DB.clientes);
+  const saf=legible?sum(DB.clientes,p=>sum((p.saldoAFavor||[]).filter(m=>!m.revertido&&dia10(m.fecha)<=hasta),m=>num(m.monto))):null;
+  const bloqueSaf=legible
+    ?`<table><tbody><tr><td>Saldo CxC al ${fdate(hasta)}</td><td class="n">${rmM(Df.total)}</td></tr>
+      <tr><td>Anticipos de clientes (saldo a favor) al ${fdate(hasta)}</td><td class="n">${rmM(saf)}</td></tr>
+      <tr class="tot"><td>Exposición neta</td><td class="n">${rmM(Df.total-saf)}</td></tr></tbody></table>
+      <div class="note">Exposición neta = saldo CxC − anticipos de clientes. Suma los movimientos no revertidos con fecha hasta el corte; los movimientos revertidos no guardan fecha de reversión y se excluyen en todos los cortes.</div>`
+    :`<div class="note">No se pudo leer la colección «clientes» (permisos o nombre distinto): los anticipos de clientes y la exposición neta no están disponibles. El resto del bloque no depende de ella.</div>`;
+
+  return `<h2>4 · Cuentas por cobrar (CxC)</h2>
+  <div class="note" style="margin-bottom:10px">Roll-forward con abonos y fechas, no con el campo saldo de hoy. Se usa el total de cada cuenta tal cual. Las cuentas por cobrar no se filtran por el interruptor de socios.</div>
+  ${avisos.map(a=>`<div class="warnbar">${esc(a)}</div>`).join('')}
+  <div class="card" style="margin-bottom:14px"><table><thead><tr><th>Concepto</th><th class="n">Importe</th></tr></thead><tbody>
+    <tr><td>Saldo inicial (al ${fdate(ini)})</td><td class="n">${rmM(Di.todo)}</td></tr>
+    <tr><td>+ Generado en el mes (ventas)</td><td class="n">${rmM(generado)}</td></tr>
+    <tr><td>− Cobrado en el mes en efectivo</td><td class="n">${rmM(-cobEf)}</td></tr>
+    <tr><td>− Cobrado en el mes con saldo a favor aplicado</td><td class="n">${rmM(-cobSaf)}</td></tr>
+    ${Math.abs(rev)>0.005?`<tr><td>+ Cobros revertidos en el mes<div class="note" style="margin:0">Abonos de meses anteriores que se revirtieron dentro de este mes</div></td><td class="n">${rmM(rev)}</td></tr>`:''}
+    <tr class="tot"><td>= Saldo final (al ${fdate(hasta)})</td><td class="n">${rmM(final)}</td></tr></tbody></table></div>
+  <div class="card" style="margin-bottom:14px"><h3>Top de clientes por saldo al ${fdate(hasta)}</h3><table><thead><tr><th>Cliente</th><th class="n">Saldo</th><th class="n">% del total</th></tr></thead><tbody>
+    ${filasTop||'<tr><td colspan="3" class="note">Sin saldos pendientes al corte</td></tr>'}
+    <tr class="tot"><td>TOTAL</td><td class="n">${rmM(totalTop)}</td><td class="n">100%</td></tr></tbody></table>
+    <div style="margin-top:12px">${bloqueSaf}</div></div>`;
+}
+
 function rReporteMensual(){
   const inp=$('rmMes'), cuerpo=$('rmCuerpo'); if(!inp||!cuerpo) return;
   if(!inp.value) inp.value=mesAnteriorISO();
@@ -469,7 +667,7 @@ function rReporteMensual(){
     }
   } finally { PER=PER0; R=R0; }
 
-  let html=`<div class="lectura">📅 <b>Reporte mensual · ${esc(etiqueta)}</b> (${fdate(desde)} al ${fdate(hasta)}). Todos los importes son sin impuestos.</div>`;
+  let html=`<div class="rm-imp-head">Reporte mensual para socios · ${esc(etiqueta)} (${fdate(desde)} al ${fdate(hasta)})</div><div class="lectura">📅 <b>Reporte mensual · ${esc(etiqueta)}</b> (${fdate(desde)} al ${fdate(hasta)}). Todos los importes son sin impuestos.</div>`;
 
   /* ---------- Bloque 1: flujo de efectivo ---------- */
   html+='<h2>1 · Flujo de efectivo</h2>';
@@ -502,14 +700,15 @@ function rReporteMensual(){
     if(Math.abs(neto-Rf.flujo)>0.5) console.warn('Reporte mensual: el neto del desglose ('+neto+') no coincide con calc().flujo ('+Rf.flujo+')');
 
     html+=`<div class="grid g4" style="margin-bottom:12px">
-      ${kpi('blue','Saldo inicial',rmM(saldoIni),Rprev||siPrevio?'Acumulado al cierre del mes anterior':'Inicio del flujo')}
+      ${kpi('blue','Acumulado al inicio del mes',rmM(saldoIni),'Desde el arranque del flujo (01/10/2026)')}
       ${kpi('ok','Entradas',rmM(entradas),'Efectivo que entró')}
       ${kpi('bad','Salidas',rmM(salidas),'Efectivo que salió')}
       ${kpi(neto<0?'bad':'ok','Neto del mes',rmM(neto),'Entradas − salidas')}
-      ${kpi(saldoFin<0?'bad':'gold','Saldo final',rmM(saldoFin),'Al cierre del mes')}
+      ${kpi(saldoFin<0?'bad':'gold','Acumulado al cierre del mes',rmM(saldoFin),'Desde el arranque del flujo (01/10/2026)')}
     </div>
-    <div class="lectura">Puente: <b>${rmM(saldoIni)}</b> saldo inicial ${siEnMes?`+ <b>${rmM(siEnMes)}</b> saldo inicial capturado en el mes `:''}+ <b class="${neto<0?'neg':'pos'}">${rmM(neto)}</b> neto del mes = <b>${rmM(saldoFin)}</b> saldo final.<br>
+    <div class="lectura">Puente: <b>${rmM(saldoIni)}</b> acumulado al inicio ${siEnMes?`+ <b>${rmM(siEnMes)}</b> saldo inicial capturado en el mes `:''}+ <b class="${neto<0?'neg':'pos'}">${rmM(neto)}</b> neto del mes = <b>${rmM(saldoFin)}</b> acumulado al cierre.<br>
     Neto = operativo <b>${rmM(op.e-op.s)}</b> + inversión <b>${rmM(inv.e-inv.s)}</b> + financiamiento <b>${rmM(fin.e-fin.s)}</b>.</div>
+    <div class="note">Este acumulado mide el efectivo generado o consumido desde el 01/10/2026. No es el saldo de caja o bancos, porque no se capturó el efectivo disponible al arranque.</div>
     ${desde<FLUJO_INICIO?`<div class="note">El flujo cuenta desde el ${fdate(FLUJO_INICIO)}; lo anterior no se incluye.</div>`:''}
     ${op.html}${inv.html}${fin.html}
     <div class="note">El flujo es efectivo de todos los proveedores y clientes: el interruptor «Incluir material de socios» no lo afecta.</div>`;
@@ -532,7 +731,10 @@ function rReporteMensual(){
   ${filas.map(x=>`<tr><td>${esc(x.k)}</td>${fila(x)}</tr>`).join('')||'<tr><td colspan="8" class="note">Sin compras ni ventas de material en el mes</td></tr>'}
   <tr class="tot"><td>TOTAL</td>${fila(T)}</tr></tbody></table>
   <div class="note">Entradas = compras de CxP del mes (por fecha de ticket). Salidas = ventas del mes. Diferencia = entradas − salidas. Son montos de material, no efectivo: lo cobrado y lo pagado en el mes está en el Bloque 1.</div></div>`;
+  html+=rmBloqueCxP(desde,hasta,Rm);
+  html+=rmBloqueCxC(desde,hasta,Rm);
   cuerpo.innerHTML=html;
+  try{ autopruebaCxP(); autopruebaCxC(); }catch(e){ console.warn('Autoprueba CxP/CxC no se pudo ejecutar: '+e.message); }
 }
 
 /* ======================================================================
