@@ -335,24 +335,29 @@ function calc(){
   R.cobrado=sum(D.cobros.filter(c=>!c.revertido&&inP(c.fecha)),cobroSinIva);
   R.pagado=sum(D.pagos.filter(p=>!p.revertido&&inP(p.fecha)),p=>num(p.pagado??p.monto??p.total)-num(p.iva||0));
   R.anticipos=sum(D.pagos.filter(p=>!p.revertido&&p.origen==='anticipo'&&inP(p.fecha)),p=>num(p.pagado??p.monto??p.total));
-  // Rubros del flujo (los mismos que el módulo Flujo de efectivo): financiamiento u operación; el 'Saldo inicial' se ignora.
+  // Rubros del flujo (los mismos que el módulo Flujo de efectivo): inversión, financiamiento u operación; el 'Saldo inicial' se ignora.
   const montoGasto=g=>g.montoBase!=null?num(g.montoBase):num(g.total??g.monto);
   const gastosP=D.gastos.filter(g=>inP(g.fecha));
   R.gastosFin=sum(gastosP.filter(g=>g.tipoGasto==='financiamiento'),montoGasto);
-  R.gastosOp=sum(gastosP.filter(g=>g.tipoGasto!=='financiamiento'),montoGasto);
-  R.gastos=R.gastosOp+R.gastosFin;
+  R.gastosInv=sum(gastosP.filter(g=>g.tipoGasto==='inversion'),montoGasto);
+  R.gastosOp=sum(gastosP.filter(g=>g.tipoGasto!=='financiamiento'&&g.tipoGasto!=='inversion'),montoGasto);
+  R.gastos=R.gastosOp+R.gastosFin+R.gastosInv;
   const tipoNorm=t=>String(t||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toLowerCase();
   const TIPOS_FIN=['aportacion o prestamo','aportacion de socio','disposicion de credito','retiro o devolucion a socio','retiro de socio'];
   const TIPOS_ENTRADA=['entrada','otra entrada','anticipo de cliente','aportacion o prestamo','aportacion de socio','disposicion de credito'];
   const manuales=(D.flujo||[]).filter(m=>inP(m.fecha)&&tipoNorm(m.tipo)!=='saldo inicial');
   const esEntrada=m=>TIPOS_ENTRADA.includes(tipoNorm(m.tipo));
-  const manFin=manuales.filter(m=>TIPOS_FIN.includes(tipoNorm(m.tipo))), manOp=manuales.filter(m=>!TIPOS_FIN.includes(tipoNorm(m.tipo)));
+  const manInv=manuales.filter(m=>tipoNorm(m.tipo)==='inversion en activo');
+  const manFin=manuales.filter(m=>TIPOS_FIN.includes(tipoNorm(m.tipo))), manOp=manuales.filter(m=>!TIPOS_FIN.includes(tipoNorm(m.tipo))&&tipoNorm(m.tipo)!=='inversion en activo');
+  R.inversionManual=sum(manInv,m=>num(m.importe));
+  R.inversion=R.gastosInv+R.inversionManual;
   R.financiamientoEntradas=sum(manFin.filter(esEntrada),m=>num(m.importe));
   R.financiamientoSalidas=sum(manFin.filter(m=>!esEntrada(m)),m=>num(m.importe))+R.gastosFin;
   R.otrosOperativos=sum(manOp.filter(esEntrada),m=>num(m.importe))-sum(manOp.filter(m=>!esEntrada(m)),m=>num(m.importe));
   R.flujoOperativo=R.cobrado-R.pagado-R.gastosOp+R.otrosOperativos;
   R.flujoFinanciamiento=R.financiamientoEntradas-R.financiamientoSalidas;
-  R.flujo=R.flujoOperativo+R.flujoFinanciamiento; // neto de efectivo (operativo + financiamiento)
+  R.flujoInversion=-R.inversion;
+  R.flujo=R.flujoOperativo+R.flujoInversion+R.flujoFinanciamiento; // neto de efectivo (operativo + inversión + financiamiento)
   // --- Precios vigentes y costo promedio
   const costoProm=grp(cxpCompras,c=>norm(c.material),c=>({kg:num(c.kg),m:num(c.total)}));
   R.precioMat=m=>{
@@ -456,6 +461,7 @@ window.DIAG=function(){
     ['IVA de pagos',sum(D.pagos.filter(p=>!p.revertido&&inP(p.fecha)),p=>num(p.iva))],
     ['Líneas de venta con retención de IVA',sum(lineasRet,l=>l.subtotal!=null?num(l.subtotal):num(l.cantidad)*num(l.precioUnitario)),lineasRet.length+' líneas'],
     ['Gastos de operación',R.gastosOp],
+    ['Gastos de inversión',R.gastosInv],
     ['Gastos de financiamiento',R.gastosFin],
     ['Aportaciones y préstamos',R.financiamientoEntradas],
     ['Pagos de deuda y retiros',R.financiamientoSalidas,'incluye gastos de financiamiento'],
@@ -494,6 +500,7 @@ function rResumen(){
   $('p-resumen').innerHTML=`
   <div class="lectura">📌 <b>Lectura rápida · ${esc(PER.label)}:</b> se vendieron <b>${fmt$(R.ventasMonto)}</b> y se compró material por <b>${fmt$(R.comprasMonto)}</b>.
   El flujo operativo fue <b class="${R.flujoOperativo<0?'neg':'pos'}">${fmt$(R.flujoOperativo)}</b> (cobrado − pagado − gastos de operación),
+  La inversión en activos fue <b class="${R.flujoInversion<0?'neg':'pos'}">${fmt$(R.flujoInversion)}</b>,
   el de financiamiento <b class="${R.flujoFinanciamiento<0?'neg':'pos'}">${fmt$(R.flujoFinanciamiento)}</b> y el flujo neto de efectivo <b class="${R.flujo<0?'neg':'pos'}">${fmt$(R.flujo)}</b>.
   Hoy <b>debemos ${fmt$(R.cxpTotal)}</b> a proveedores y <b>nos deben ${fmt$(R.cxcTotal)}</b>.
   ${pe.pe>0?`En el mes en curso llevamos <b>${fmtPct(pe.cob*100)}</b> del punto de equilibrio.`:''}</div>
@@ -508,12 +515,18 @@ function rResumen(){
     ${kpi('bad','Gastos de operación',fmt$(R.gastosOp),'Efectivo que salió')}
     ${kpi(R.flujoOperativo<0?'bad':'ok','Flujo operativo',fmt$(R.flujoOperativo),'Cobrado − pagado − gastos'+(Math.abs(R.otrosOperativos)>0.005?' · incluye otros movimientos '+fmt$(R.otrosOperativos):''))}
   </div>
+  <h3 style="margin:14px 0 8px;font-size:14px;color:var(--navy)">Inversión</h3>
+  <div class="grid g4">
+    ${kpi('bad','Gastos de inversión',fmt$(R.gastosInv),'Compra de activo o mejora')}
+    ${kpi('bad','Inversión en activo (manual)',fmt$(R.inversionManual),'Movimientos manuales')}
+    ${kpi(R.flujoInversion<0?'bad':'ok','Flujo de inversión',fmt$(R.flujoInversion),'Efectivo que salió en activos')}
+  </div>
   <h3 style="margin:14px 0 8px;font-size:14px;color:var(--navy)">Financiamiento</h3>
   <div class="grid g4">
     ${kpi('ok','Aportaciones y préstamos recibidos',fmt$(R.financiamientoEntradas),'Efectivo que entró')}
     ${kpi('bad','Pagos de deuda y retiros',fmt$(R.financiamientoSalidas),'Efectivo que salió')}
     ${kpi(R.flujoFinanciamiento<0?'bad':'ok','Flujo de financiamiento',fmt$(R.flujoFinanciamiento),'Recibido − pagado')}
-    ${kpi(R.flujo<0?'bad':'ok','Flujo neto de efectivo',fmt$(R.flujo),'Operativo + financiamiento')}
+    ${kpi(R.flujo<0?'bad':'ok','Flujo neto de efectivo',fmt$(R.flujo),'Operativo + inversión + financiamiento')}
   </div>
 
   <h2>Situación de hoy</h2>
