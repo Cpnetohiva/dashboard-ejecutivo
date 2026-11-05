@@ -19,7 +19,7 @@ header{background:var(--navy);color:#fff;padding:14px 20px;position:sticky;top:0
 h1{font-size:19px;letter-spacing:.3px}h1 span{color:var(--gold)}
 .sub{font-size:12px;color:#b9c6da}
 select,input,button{font-family:inherit;font-size:14px}
-select,input[type=text],input[type=password],input[type=date],input[type=number],textarea{padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--txt)}
+select,input[type=text],input[type=password],input[type=date],input[type=month],input[type=number],textarea{padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--txt)}
 .btn{background:var(--gold);color:var(--navy);border:0;padding:9px 16px;border-radius:8px;font-weight:700;cursor:pointer}
 .btn.ghost{background:transparent;color:#fff;border:1px solid #4a6288}
 .btn.dark{background:var(--navy);color:#fff}
@@ -73,7 +73,7 @@ details table{margin:0 0 10px 18px;width:calc(100% - 18px)}
 .pe-in{display:flex;gap:16px;flex-wrap:wrap;align-items:end}
 .pe-in label{font-size:12px;font-weight:700;color:var(--mut);display:block;margin-bottom:4px;text-transform:uppercase}
 @media(max-width:640px){.kpi .val{font-size:22px}nav{top:92px}}
-@media print{header .btn,nav,.noprint{display:none}header,nav{position:static}.panel{display:block!important;page-break-inside:avoid}}
+@media print{header .btn,nav,.noprint{display:none}header,nav{position:static}.panel{display:block!important;page-break-inside:avoid}body.imp-reporte .panel:not(#p-reporte),body.imp-reporte header,body.imp-reporte #warns{display:none!important}}
 </style>
 </head>
 <body>
@@ -137,6 +137,7 @@ details table{margin:0 0 10px 18px;width:calc(100% - 18px)}
   <button data-p="cxp">🏭 Por pagar (CxP)</button>
   <button data-p="cxc">🤝 Por cobrar (CxC)</button>
   <button data-p="pe">⚖️ Punto de equilibrio</button>
+  <button data-p="reporte">📅 Reporte mensual</button>
 </nav>
 <main>
   <div id="warns"></div>
@@ -147,6 +148,13 @@ details table{margin:0 0 10px 18px;width:calc(100% - 18px)}
   <section class="panel" id="p-cxp"></section>
   <section class="panel" id="p-cxc"></section>
   <section class="panel" id="p-pe"></section>
+  <section class="panel" id="p-reporte">
+    <div class="card noprint" style="display:flex;gap:14px;align-items:end;flex-wrap:wrap;margin-bottom:14px">
+      <div><label for="rmMes" style="display:block;font-size:12px;font-weight:700;color:var(--mut);margin-bottom:4px;text-transform:uppercase">Mes</label><input type="month" id="rmMes"></div>
+      <button class="btn dark" id="rmImprimir">🖨 Imprimir</button>
+    </div>
+    <div id="rmCuerpo"></div>
+  </section>
 </main>
 </div>
 
@@ -291,6 +299,8 @@ function calcPeriodo(){
 }
 const inP = f => { f=String(f||'').slice(0,10); return f>=PER.desde && f<=PER.hasta; };
 ['selPeriodo','fDesde','fHasta'].forEach(id=>$(id).onchange=()=>renderAll());
+$('rmMes').onchange=()=>{ try{ rReporteMensual(); }catch(e){ $('rmCuerpo').innerHTML='<div class="warnbar">No se pudo armar el reporte mensual: '+esc(e.message)+'</div>'; } };
+$('rmImprimir').onclick=()=>{ const quitar=()=>document.body.classList.remove('imp-reporte'); document.body.classList.add('imp-reporte'); window.addEventListener('afterprint',quitar,{once:true}); window.print(); };
 $('chkSocios').onchange=()=>{ try{ localStorage.setItem('dash_incluir_socios',$('chkSocios').checked?'1':'0'); }catch(e){} renderAll(); };
 
 /* ======================================================================
@@ -354,6 +364,8 @@ function calc(){
   R.financiamientoEntradas=sum(manFin.filter(esEntrada),m=>num(m.importe));
   R.financiamientoSalidas=sum(manFin.filter(m=>!esEntrada(m)),m=>num(m.importe))+R.gastosFin;
   R.otrosOperativos=sum(manOp.filter(esEntrada),m=>num(m.importe))-sum(manOp.filter(m=>!esEntrada(m)),m=>num(m.importe));
+  R.manDet=manuales.map(m=>{const t=tipoNorm(m.tipo); return {rubro:t==='inversion en activo'?'inversion':TIPOS_FIN.includes(t)?'financiamiento':'operacion',k:t,tipo:String(m.tipo||'Sin tipo').trim(),entrada:esEntrada(m)?num(m.importe):0,salida:esEntrada(m)?0:num(m.importe)};});
+  R.gastosDet=gastosP.map(g=>({rubro:g.tipoGasto==='inversion'?'inversion':g.tipoGasto==='financiamiento'?'financiamiento':'operacion',concepto:norm(g.concepto)||norm(g.beneficiario)||'GASTO',monto:montoGasto(g)}));
   R.flujoOperativo=R.cobrado-R.pagado-R.gastosOp+R.otrosOperativos;
   R.flujoFinanciamiento=R.financiamientoEntradas-R.financiamientoSalidas;
   R.flujoInversion=-R.inversion;
@@ -416,6 +428,114 @@ function aging(arr,fechaF,valF){
 }
 
 /* ======================================================================
+   REPORTE MENSUAL (pestaña propia: mes elegido, independiente del selector de periodo)
+   Importes sin impuestos. Bloque 1: flujo de efectivo (puente saldo inicial + neto = saldo final).
+   Bloque 2: material (entradas = compras CxP, salidas = ventas), no es efectivo.
+   ====================================================================== */
+const FLUJO_INICIO='2026-10-01'; // mismo FLUJO_FECHA_INICIO de js/flujo.js en EVE Control
+const tipoNormG=t=>String(t||'').normalize('NFD').replace(/[̀-ͯ]/g,'').trim().toLowerCase();
+const rmM=n=>(n<-0.005?'-':'')+fmt$2(Math.abs(n)); // negativos con signo delante
+const MESES_L=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+function mesAnteriorISO(){ const t=new Date(); return iso(new Date(t.getFullYear(),t.getMonth()-1,1)).slice(0,7); }
+
+// Une las partidas de un rubro: las fijas van primero; el resto, de mayor a menor, y lo que pase de 'top' se junta en "Otros conceptos".
+function rmFilasRubro(fijas,variables,top){
+  const m={}; variables.forEach(v=>{ const o=m[v.c]||(m[v.c]={c:v.c,e:0,s:0}); o.e+=v.e; o.s+=v.s; });
+  const lista=Object.values(m).filter(x=>Math.abs(x.e)+Math.abs(x.s)>0.005).sort((a,b)=>(b.e+b.s)-(a.e+a.s));
+  const vis=lista.slice(0,top), resto=lista.slice(top);
+  if(resto.length) vis.push({c:'Otros conceptos ('+resto.length+')',e:sum(resto,x=>x.e),s:sum(resto,x=>x.s)});
+  return fijas.filter(x=>Math.abs(x.e)+Math.abs(x.s)>0.005).concat(vis);
+}
+function rmTablaRubro(titulo,filas){
+  const e=sum(filas,x=>x.e), s=sum(filas,x=>x.s);
+  const cuerpo=filas.map(x=>`<tr><td>${esc(x.c)}${x.nota?`<div class="note" style="margin:0">${esc(x.nota)}</div>`:''}</td><td class="n">${x.e?rmM(x.e):'—'}</td><td class="n">${x.s?rmM(x.s):'—'}</td><td class="n ${x.e-x.s<0?'neg':''}">${rmM(x.e-x.s)}</td></tr>`).join('')
+    ||'<tr><td colspan="4" class="note">Sin movimientos en el mes</td></tr>';
+  return {e,s,html:`<div class="card" style="margin-bottom:14px"><h3>${esc(titulo)}</h3><table><thead><tr><th>Concepto</th><th class="n">Entradas</th><th class="n">Salidas</th><th class="n">Neto</th></tr></thead><tbody>${cuerpo}<tr class="tot"><td>Flujo ${esc(titulo.toLowerCase())}</td><td class="n">${rmM(e)}</td><td class="n">${rmM(s)}</td><td class="n ${e-s<0?'neg':'pos'}">${rmM(e-s)}</td></tr></tbody></table></div>`};
+}
+
+function rReporteMensual(){
+  const inp=$('rmMes'), cuerpo=$('rmCuerpo'); if(!inp||!cuerpo) return;
+  if(!inp.value) inp.value=mesAnteriorISO();
+  const [y,m]=inp.value.split('-').map(Number); if(!y||!m){ cuerpo.innerHTML='<div class="note">Elige un mes.</div>'; return; }
+  const desde=iso(new Date(y,m-1,1)), hasta=iso(new Date(y,m,0)), etiqueta=MESES_L[m-1]+' '+y;
+  const PER0=PER, R0=R;                     // se restauran al terminar: el resto del tablero no se entera
+  let Rm=null, Rf=null, Rprev=null;
+  try{
+    PER={desde,hasta,label:etiqueta}; Rm=calc();                         // mes completo (material)
+    const d0=desde<FLUJO_INICIO?FLUJO_INICIO:desde;                      // el flujo solo cuenta desde FLUJO_INICIO
+    if(hasta>=FLUJO_INICIO){
+      if(d0===desde) Rf=Rm; else { PER={desde:d0,hasta,label:etiqueta}; Rf=calc(); }
+      if(d0>FLUJO_INICIO){ PER={desde:FLUJO_INICIO,hasta:iso(new Date(y,m-1,0)),label:'previo'}; Rprev=calc(); }
+    }
+  } finally { PER=PER0; R=R0; }
+
+  let html=`<div class="lectura">📅 <b>Reporte mensual · ${esc(etiqueta)}</b> (${fdate(desde)} al ${fdate(hasta)}). Todos los importes son sin impuestos.</div>`;
+
+  /* ---------- Bloque 1: flujo de efectivo ---------- */
+  html+='<h2>1 · Flujo de efectivo</h2>';
+  if(!Rf){
+    html+=`<div class="note">El Flujo de efectivo inicia el ${fdate(FLUJO_INICIO)}; este mes es anterior y no tiene flujo.</div>`;
+  } else {
+    const d0=desde<FLUJO_INICIO?FLUJO_INICIO:desde;
+    const man=DB.flujo||[];
+    const esSIman=x=>tipoNormG(x.tipo)==='saldo inicial';
+    const f10=x=>String(x.fecha||'').slice(0,10);
+    const siPrevio=sum(man.filter(x=>esSIman(x)&&f10(x)>=FLUJO_INICIO&&f10(x)<d0),x=>num(x.importe));
+    const siEnMes=sum(man.filter(x=>esSIman(x)&&f10(x)>=d0&&f10(x)<=hasta),x=>num(x.importe));
+    const saldoIni=siPrevio+(Rprev?Rprev.flujo:0);
+
+    // Operativo: cobros, pagos a proveedores (sin anticipos), anticipos aparte, gastos y movimientos manuales operativos
+    const manR=r=>(Rf.manDet||[]).filter(x=>x.rubro===r);
+    const gasR=r=>(Rf.gastosDet||[]).filter(x=>x.rubro===r).map(x=>({c:x.concepto,e:0,s:x.monto}));
+    const manV=r=>manR(r).filter(x=>x.k!=='anticipo a proveedor').map(x=>({c:x.tipo,e:x.entrada,s:x.salida}));
+    const antManual=sum(manR('operacion').filter(x=>x.k==='anticipo a proveedor'),x=>x.salida);
+    const fijasOp=[
+      {c:'Cobrado a clientes',e:Rf.cobrado,s:0},
+      {c:'Pagos a proveedores',e:0,s:Rf.pagado-Rf.anticipos},
+      {c:'Anticipos a proveedores',e:0,s:Rf.anticipos+antManual,nota:'Pagos con origen anticipo y movimientos manuales «Anticipo a proveedor»'}
+    ];
+    const op=rmTablaRubro('Operativo',rmFilasRubro(fijasOp,gasR('operacion').concat(manV('operacion')),6));
+    const inv=rmTablaRubro('Inversión',rmFilasRubro([],gasR('inversion').concat(manV('inversion')),6));
+    const fin=rmTablaRubro('Financiamiento',rmFilasRubro([],gasR('financiamiento').concat(manV('financiamiento')),6));
+
+    const entradas=op.e+inv.e+fin.e, salidas=op.s+inv.s+fin.s, neto=entradas-salidas, saldoFin=saldoIni+siEnMes+neto;
+    if(Math.abs(neto-Rf.flujo)>0.5) console.warn('Reporte mensual: el neto del desglose ('+neto+') no coincide con calc().flujo ('+Rf.flujo+')');
+
+    html+=`<div class="grid g4" style="margin-bottom:12px">
+      ${kpi('blue','Saldo inicial',rmM(saldoIni),Rprev||siPrevio?'Acumulado al cierre del mes anterior':'Inicio del flujo')}
+      ${kpi('ok','Entradas',rmM(entradas),'Efectivo que entró')}
+      ${kpi('bad','Salidas',rmM(salidas),'Efectivo que salió')}
+      ${kpi(neto<0?'bad':'ok','Neto del mes',rmM(neto),'Entradas − salidas')}
+      ${kpi(saldoFin<0?'bad':'gold','Saldo final',rmM(saldoFin),'Al cierre del mes')}
+    </div>
+    <div class="lectura">Puente: <b>${rmM(saldoIni)}</b> saldo inicial ${siEnMes?`+ <b>${rmM(siEnMes)}</b> saldo inicial capturado en el mes `:''}+ <b class="${neto<0?'neg':'pos'}">${rmM(neto)}</b> neto del mes = <b>${rmM(saldoFin)}</b> saldo final.<br>
+    Neto = operativo <b>${rmM(op.e-op.s)}</b> + inversión <b>${rmM(inv.e-inv.s)}</b> + financiamiento <b>${rmM(fin.e-fin.s)}</b>.</div>
+    ${desde<FLUJO_INICIO?`<div class="note">El flujo cuenta desde el ${fdate(FLUJO_INICIO)}; lo anterior no se incluye.</div>`:''}
+    ${op.html}${inv.html}${fin.html}
+    <div class="note">El flujo es efectivo de todos los proveedores y clientes: el interruptor «Incluir material de socios» no lo afecta.</div>`;
+  }
+
+  /* ---------- Bloque 2: material ---------- */
+  const claves=[...new Set(Object.keys(Rm.compras).concat(Object.keys(Rm.ventas)))];
+  const filas=claves.map(k=>{
+    const c=Rm.compras[k]||{kg:0,monto:0}, v=Rm.ventas[k]||{cant:0,monto:0}, pz=Rm.ventasUnidad[k]==='PZ';
+    return {k,ck:c.kg,cm:c.monto,vk:pz?0:v.cant,vp:pz?v.cant:0,vm:v.monto};
+  }).sort((a,b)=>(b.cm+b.vm)-(a.cm+a.vm));
+  const T={ck:sum(filas,x=>x.ck),cm:sum(filas,x=>x.cm),vk:sum(filas,x=>x.vk),vp:sum(filas,x=>x.vp),vm:sum(filas,x=>x.vm)};
+  const dif=(a,b,f)=>`<td class="n ${a-b<0?'neg':''}">${f(a-b)}</td>`;
+  const fila=x=>`<td class="n">${fmtN(x.ck)}</td><td class="n">${rmM(x.cm)}</td><td class="n">${fmtN(x.vk)}</td><td class="n">${x.vp?fmtN(x.vp):'—'}</td><td class="n">${rmM(x.vm)}</td>${dif(x.ck,x.vk,n=>fmtN(n))}${dif(x.cm,x.vm,rmM)}`;
+  const socios=incluirSocios();
+  html+=`<h2>2 · Material: entradas vs salidas</h2>
+  <div style="margin-bottom:10px"><span class="pill ${socios?'ok':'warn'}">Material de socios: ${socios?'incluido':'excluido'}</span>
+    <span class="note" style="display:inline;margin-left:8px">${socios?'Las compras de GERMAN y MARIO M cuentan como entradas.':'Las compras de GERMAN y MARIO M no cuentan como entradas.'} Se cambia con «Incluir material de socios» en la parte superior.</span></div>
+  <div class="card"><table><thead><tr><th>Material</th><th class="n">Entradas kg</th><th class="n">Entradas $</th><th class="n">Salidas kg</th><th class="n">Salidas pzas</th><th class="n">Salidas $</th><th class="n">Dif. kg</th><th class="n">Dif. $</th></tr></thead><tbody>
+  ${filas.map(x=>`<tr><td>${esc(x.k)}</td>${fila(x)}</tr>`).join('')||'<tr><td colspan="8" class="note">Sin compras ni ventas de material en el mes</td></tr>'}
+  <tr class="tot"><td>TOTAL</td>${fila(T)}</tr></tbody></table>
+  <div class="note">Entradas = compras de CxP del mes (por fecha de ticket). Salidas = ventas del mes. Diferencia = entradas − salidas. Son montos de material, no efectivo: lo cobrado y lo pagado en el mes está en el Bloque 1.</div></div>`;
+  cuerpo.innerHTML=html;
+}
+
+/* ======================================================================
    RENDER
    ====================================================================== */
 function kpi(cls,lbl,val,hint){return `<div class="card kpi ${cls}"><div class="lbl">${lbl}</div><div class="val">${val}</div><div class="hint">${hint||''}</div></div>`;}
@@ -432,6 +552,7 @@ function renderAll(){
   const tag=$('tagSocios'); if(tag) tag.style.display=incluirSocios()?'none':'';
   calcPeriodo(); R=calc();
   rResumen(); rMateriales(); rVentas(); rInventario(); rCxP(); rCxC(); rPE();
+  try{ rReporteMensual(); }catch(e){ const c=$('rmCuerpo'); if(c) c.innerHTML='<div class="warnbar">No se pudo armar el reporte mensual: '+esc(e.message)+'</div>'; }
 }
 
 // Conciliación contra los módulos: window.DIAG() en la consola. No toca la interfaz.
