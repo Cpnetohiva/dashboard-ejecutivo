@@ -145,8 +145,8 @@ details table{margin:0 0 10px 18px;width:calc(100% - 18px)}
         <option value="todo">Todo el histórico</option>
         <option value="rango">Rango de fechas…</option>
       </select>
-      <label class="noprint" style="display:flex;align-items:center;gap:4px;color:#fff;font-size:13px;cursor:pointer"><input type="checkbox" id="chkSocios"> Incluir material de socios</label>
-      <span id="tagSocios" style="display:none;background:#e69500;color:#fff;border-radius:10px;padding:2px 8px;font-size:12px;font-weight:600">sin material de socios</span>
+      <label class="noprint" style="display:flex;align-items:center;gap:4px;color:#fff;font-size:13px;cursor:pointer"><input type="checkbox" id="chkSocios"> Incluir material de socios (solo importes)</label>
+      <span id="tagSocios" style="display:none;background:#e69500;color:#fff;border-radius:10px;padding:2px 8px;font-size:12px;font-weight:600">importes sin material de socios</span>
       <span class="rango" id="rangoBox"><input type="date" id="fDesde"><input type="date" id="fHasta"></span>
       <button class="btn ghost" id="btnRef">↻ Actualizar</button>
       <button class="btn ghost" onclick="window.print()">🖨 Imprimir</button>
@@ -386,8 +386,16 @@ function calc(){
   const cxpCompras=D.cxp.filter(c=>!esSI(c)&&verSocio(c)); // saldo inicial no es compra
   const cxpP=cxpCompras.filter(c=>inP(c.fechaTicket));
   R.compras=grp(cxpP,c=>norm(c.material),c=>({kg:num(c.kg),monto:num(c.total)}));
-  R.comprasKg=sum(Object.values(R.compras),x=>x.kg); R.comprasMonto=sum(Object.values(R.compras),x=>x.monto);
-  R.kgBascula=sum(D.destaraje.filter(r=>inP(r.fechaSalida||r.fechaEntrada)),r=>num(r.kg));
+  R.comprasMonto=sum(Object.values(R.compras),x=>x.monto);
+  // Kg: SIEMPRE de la báscula (destaraje, todos los tickets, socios y pendientes incluidos); el interruptor de socios nunca los filtra.
+  const basculaP=D.destaraje.filter(r=>inP(r.fechaSalida||r.fechaEntrada));
+  R.kgBasculaMat=grp(basculaP,r=>norm(r.material),r=>({kg:num(r.kg)}));
+  R.kgBascula=sum(basculaP,r=>num(r.kg));
+  // Kg con cuenta por pagar: TODAS las CxP del periodo (sin filtro de socios, sin saldo inicial), por material.
+  R.kgCxpMat=grp(D.cxp.filter(c=>!esSI(c)&&inP(c.fechaTicket)),c=>norm(c.material),c=>({kg:num(c.kg)}));
+  R.kgSinCxpMat={};
+  new Set(Object.keys(R.kgBasculaMat).concat(Object.keys(R.kgCxpMat))).forEach(m=>{ R.kgSinCxpMat[m]=(R.kgBasculaMat[m]?R.kgBasculaMat[m].kg:0)-(R.kgCxpMat[m]?R.kgCxpMat[m].kg:0); });
+  R.kgSinCxp=sum(Object.values(R.kgSinCxpMat),x=>x);
   // --- Ventas del periodo (por línea)
   const lin=[]; D.ventas.filter(v=>inP(v.fecha)).forEach(v=>(v.lineas||[]).forEach(l=>lin.push({...l,cliente:v.cliente,fecha:v.fecha})));
   R.ventasLin=lin;
@@ -465,6 +473,7 @@ function calc(){
   R.invSinValuar=R.inv.filter(x=>x.valor==null&&x.kg>0).length;
   // --- CxP pendiente
   const pend=D.cxp.filter(c=>num(c.saldo)>0.01&&verSocio(c));
+  R.cxpTotalConSocios=sum(D.cxp.filter(c=>num(c.saldo)>0.01),c=>num(c.saldo)); // no depende del interruptor de socios
   R.cxpLista=pend; R.cxpTotal=sum(pend,c=>num(c.saldo)); R.cxpSaldoInicial=sum(pend.filter(esSI),c=>num(c.saldo));
   R.cxpProv=grp(pend,c=>c.proveedor||'(sin proveedor)',c=>({saldo:num(c.saldo)}));
   R.cxpProvMat=grp(pend,c=>(c.proveedor||'(sin proveedor)')+'||'+norm(c.material),c=>({saldo:num(c.saldo),kg:num(c.kg)}));
@@ -504,7 +513,7 @@ function aging(arr,fechaF,valF){
    Importes sin impuestos. Bloque 1: flujo de efectivo (puente saldo inicial + neto = saldo final).
    Bloque 2: material (entradas = compras CxP, salidas = ventas), no es efectivo.
    ====================================================================== */
-const FLUJO_INICIO='2026-10-01'; // mismo FLUJO_FECHA_INICIO de js/flujo.js en EVE Control
+const FLUJO_INICIO='2026-09-01'; // mismo FLUJO_FECHA_INICIO de js/flujo.js en EVE Control
 const tipoNormG=t=>String(t||'').normalize('NFD').replace(/[̀-ͯ]/g,'').trim().toLowerCase();
 const rmM=n=>(n<-0.005?'-':'')+fmt$2(Math.abs(n)); // negativos con signo delante
 const MESES_L=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
@@ -605,7 +614,7 @@ function rmBloqueCxP(desde,hasta,Rm){
     :`<div class="note">No se pudo leer la colección «proveedores» (permisos o nombre distinto): el saldo a favor y la exposición neta no están disponibles. El resto del bloque no depende de ella.</div>`;
 
   return `<h2>3 · Cuentas por pagar (CxP)</h2>
-  <div style="margin-bottom:10px"><span class="pill ${socios?'ok':'warn'}">Material de socios: ${socios?'incluido':'excluido'}</span>
+  <div style="margin-bottom:10px"><span class="pill ${socios?'ok':'warn'}">Importes: material de socios ${socios?'incluido':'excluido'}</span>
     <span class="note" style="display:inline;margin-left:8px">Roll-forward con abonos y fechas, no con el campo saldo de hoy. Se usa el total de cada cuenta tal cual.</span></div>
   ${avisos.map(a=>`<div class="warnbar">${esc(a)}</div>`).join('')}
   <div class="card" style="margin-bottom:14px"><table><thead><tr><th>Concepto</th><th class="n">Importe</th></tr></thead><tbody>
@@ -758,37 +767,37 @@ function rReporteMensual(){
     if(Math.abs(neto-Rf.flujo)>0.5) console.warn('Reporte mensual: el neto del desglose ('+neto+') no coincide con calc().flujo ('+Rf.flujo+')');
 
     html+=`<div class="grid g4" style="margin-bottom:12px">
-      ${kpi('blue','Acumulado al inicio del mes',rmM(saldoIni),'Desde el arranque del flujo (01/10/2026)')}
+      ${kpi('blue','Acumulado al inicio del mes',rmM(saldoIni),'Desde el arranque del flujo ('+fdate(FLUJO_INICIO)+')')}
       ${kpi('ok','Entradas',rmM(entradas),'Efectivo que entró')}
       ${kpi('bad','Salidas',rmM(salidas),'Efectivo que salió')}
       ${kpi(neto<0?'bad':'ok','Neto del mes',rmM(neto),'Entradas − salidas')}
-      ${kpi(saldoFin<0?'bad':'gold','Acumulado al cierre del mes',rmM(saldoFin),'Desde el arranque del flujo (01/10/2026)')}
+      ${kpi(saldoFin<0?'bad':'gold','Acumulado al cierre del mes',rmM(saldoFin),'Desde el arranque del flujo ('+fdate(FLUJO_INICIO)+')')}
     </div>
     <div class="lectura">Puente: <b>${rmM(saldoIni)}</b> acumulado al inicio ${siEnMes?`+ <b>${rmM(siEnMes)}</b> saldo inicial capturado en el mes `:''}+ <b class="${neto<0?'neg':'pos'}">${rmM(neto)}</b> neto del mes = <b>${rmM(saldoFin)}</b> acumulado al cierre.<br>
     Neto = operativo <b>${rmM(op.e-op.s)}</b> + inversión <b>${rmM(inv.e-inv.s)}</b> + financiamiento <b>${rmM(fin.e-fin.s)}</b>.</div>
-    <div class="note">Este acumulado mide el efectivo generado o consumido desde el 01/10/2026. No es el saldo de caja o bancos, porque no se capturó el efectivo disponible al arranque.</div>
+    <div class="note">Este acumulado mide el efectivo generado o consumido desde el ${fdate(FLUJO_INICIO)}. No es el saldo de caja o bancos, porque no se capturó el efectivo disponible al arranque.</div>
     ${desde<FLUJO_INICIO?`<div class="note">El flujo cuenta desde el ${fdate(FLUJO_INICIO)}; lo anterior no se incluye.</div>`:''}
     ${op.html}${inv.html}${fin.html}
     <div class="note">El flujo es efectivo de todos los proveedores y clientes: el interruptor «Incluir material de socios» no lo afecta.</div>`;
   }
 
   /* ---------- Bloque 2: material ---------- */
-  const claves=[...new Set(Object.keys(Rm.compras).concat(Object.keys(Rm.ventas)))];
+  const claves=[...new Set(Object.keys(Rm.kgBasculaMat).concat(Object.keys(Rm.compras),Object.keys(Rm.ventas)))];
   const filas=claves.map(k=>{
     const c=Rm.compras[k]||{kg:0,monto:0}, v=Rm.ventas[k]||{cant:0,monto:0}, pz=Rm.ventasUnidad[k]==='PZ';
-    return {k,ck:c.kg,cm:c.monto,vk:pz?0:v.cant,vp:pz?v.cant:0,vm:v.monto};
+    return {k,ck:Rm.kgBasculaMat[k]?Rm.kgBasculaMat[k].kg:0,cm:c.monto,vk:pz?0:v.cant,vp:pz?v.cant:0,vm:v.monto};
   }).sort((a,b)=>(b.cm+b.vm)-(a.cm+a.vm));
   const T={ck:sum(filas,x=>x.ck),cm:sum(filas,x=>x.cm),vk:sum(filas,x=>x.vk),vp:sum(filas,x=>x.vp),vm:sum(filas,x=>x.vm)};
   const dif=(a,b,f)=>`<td class="n ${a-b<0?'neg':''}">${f(a-b)}</td>`;
   const fila=x=>`<td class="n">${fmtN(x.ck)}</td><td class="n">${rmM(x.cm)}</td><td class="n">${fmtN(x.vk)}</td><td class="n">${x.vp?fmtN(x.vp):'—'}</td><td class="n">${rmM(x.vm)}</td>${dif(x.ck,x.vk,n=>fmtN(n))}${dif(x.cm,x.vm,rmM)}`;
   const socios=incluirSocios();
   html+=`<h2>2 · Material: entradas vs salidas</h2>
-  <div style="margin-bottom:10px"><span class="pill ${socios?'ok':'warn'}">Material de socios: ${socios?'incluido':'excluido'}</span>
-    <span class="note" style="display:inline;margin-left:8px">${socios?'Las compras de GERMAN y MARIO M cuentan como entradas.':'Las compras de GERMAN y MARIO M no cuentan como entradas.'} Se cambia con «Incluir material de socios» en la parte superior.</span></div>
+  <div style="margin-bottom:10px"><span class="pill ${socios?'ok':'warn'}">Importes: material de socios ${socios?'incluido':'excluido'}</span>
+    <span class="note" style="display:inline;margin-left:8px">El interruptor «Incluir material de socios» aplica solo a importes. Los kg de entradas son siempre los de la báscula completa.</span></div>
   <div class="card"><table><thead><tr><th>Material</th><th class="n">Entradas kg</th><th class="n">Entradas $</th><th class="n">Salidas kg</th><th class="n">Salidas pzas</th><th class="n">Salidas $</th><th class="n" style="white-space:normal;min-width:84px">Diferencia (compras - ventas del mes) kg</th><th class="n" style="white-space:normal;min-width:84px">Diferencia (compras - ventas del mes) $</th></tr></thead><tbody>
   ${filas.map(x=>`<tr><td>${esc(x.k)}</td>${fila(x)}</tr>`).join('')||'<tr><td colspan="8" class="note">Sin compras ni ventas de material en el mes</td></tr>'}
   <tr class="tot"><td>TOTAL</td>${fila(T)}</tr></tbody></table>
-  <div class="note">Montos de material, no efectivo. No representa variación de inventario.</div></div>`;
+  <div class="note">Kg de entradas: báscula completa. Importe de entradas: cuenta por pagar, con el interruptor de socios aplicado. Montos de material, no efectivo. No representa variación de inventario.</div></div>`;
   html+=rmBloqueCxP(desde,hasta,Rm);
   html+=rmBloqueCxC(desde,hasta,Rm);
   cuerpo.innerHTML=html;
@@ -890,7 +899,7 @@ function rResumen(){
   <h3 style="margin:0 0 8px;font-size:14px;color:var(--navy)">Operación</h3>
   <div class="grid g4">
     ${kpi('gold','Ventas',fmt$(R.ventasMonto),fmtN(R.ventasKg)+' kg')}
-    ${kpi('blue','Compras de material',fmt$(R.comprasMonto),fmtN(R.comprasKg)+' kg comprados')}
+    ${kpi('blue','Compras de material',fmt$(R.comprasMonto),fmtN(R.kgBascula)+' kg en báscula · importe de la CxP')}
     ${kpi('ok','Cobrado a clientes',fmt$(R.cobrado),'Efectivo que entró')}
     ${kpi('bad','Pagado a proveedores',fmt$(R.pagado),'Efectivo que salió'+(R.anticipos>0?' · incluye anticipos '+fmt$(R.anticipos):''))}
     ${kpi('bad','Gastos de operación',fmt$(R.gastosOp),'Efectivo que salió')}
@@ -930,22 +939,23 @@ function rResumen(){
 
 /* ---------- MATERIALES ---------- */
 function rMateriales(){
-  const rows=Object.entries(R.compras).sort((a,b)=>b[1].monto-a[1].monto);
-  const max=Math.max(1,...rows.map(r=>r[1].monto));
-  const dif=R.kgBascula-R.comprasKg;
+  const mats=[...new Set(Object.keys(R.kgBasculaMat).concat(Object.keys(R.compras)))];
+  const rows=mats.map(m=>({m,kg:R.kgBasculaMat[m]?R.kgBasculaMat[m].kg:0,monto:R.compras[m]?R.compras[m].monto:0,sin:R.kgSinCxpMat[m]||0})).sort((a,b)=>b.monto-a.monto||b.kg-a.kg);
+  const max=Math.max(1,...rows.map(r=>r.monto));
+  const top=rows.find(r=>r.monto>0);
   $('p-materiales').innerHTML=`
-  <div class="lectura">♻️ <b>Compras de material · ${esc(PER.label)}:</b> entraron <b>${fmtN(R.comprasKg)} kg</b> con un costo de <b>${fmt$(R.comprasMonto)}</b>
-  (promedio <b>${fmt$2(R.comprasKg>0?R.comprasMonto/R.comprasKg:0)}/kg</b>).
-  ${rows[0]?`El material con más gasto es <b>${esc(rows[0][0])}</b> (${fmtPct(rows[0][1].monto/R.comprasMonto*100)} del total).`:''}</div>
-  ${Math.abs(dif)>1?`<div class="warnbar">En báscula (Destaraje) hay ${fmtN(R.kgBascula)} kg en el periodo, y ${fmtN(R.comprasKg)} kg con cuenta por pagar. Diferencia: <b>${fmtN(dif)} kg</b> (tickets sin precio vigente o aún sin aprobar).</div>`:''}
+  <div class="lectura">♻️ <b>Compras de material · ${esc(PER.label)}:</b> en báscula entraron <b>${fmtN(R.kgBascula)} kg</b> y las cuentas por pagar suman <b>${fmt$(R.comprasMonto)}</b>.
+  ${top&&R.comprasMonto>0?`El material con más gasto es <b>${esc(top.m)}</b> (${fmtPct(top.monto/R.comprasMonto*100)} del total).`:''}</div>
+  <div class="note">Los kg salen siempre de la báscula (todos los tickets, socios incluidos). El importe sale de la cuenta por pagar y es lo único que cambia con «Incluir material de socios».</div>
+  ${Math.abs(R.kgSinCxp)>1?`<div class="warnbar">${R.kgSinCxp>0?`<b>${fmtN(R.kgSinCxp)} kg</b> de báscula no tienen cuenta por pagar en el periodo.`:`Las cuentas por pagar suman <b>${fmtN(-R.kgSinCxp)} kg</b> más que la báscula en el periodo.`}</div>`:''}
   <div class="grid g2">
-    <div class="card"><h3>$ gastado por material</h3><div class="chartbox"><canvas id="chMat"></canvas></div></div>
-    <div class="card"><h3>Detalle</h3><table><thead><tr><th>Material</th><th class="n">Kg</th><th class="n">$</th><th class="n">$/kg</th><th>Peso</th></tr></thead><tbody>
-    ${rows.map(([m,x])=>`<tr><td>${esc(m)}</td><td class="n">${fmtN(x.kg)}</td><td class="n">${fmt$(x.monto)}</td><td class="n">${x.kg>0?fmt$2(x.monto/x.kg):'—'}</td><td style="width:90px">${barRow(x.monto/max*100,'g')}</td></tr>`).join('')||'<tr><td colspan="5">Sin compras en el periodo</td></tr>'}
-    <tr class="tot"><td>TOTAL</td><td class="n">${fmtN(R.comprasKg)}</td><td class="n">${fmt$(R.comprasMonto)}</td><td class="n">${R.comprasKg>0?fmt$2(R.comprasMonto/R.comprasKg):'—'}</td><td></td></tr></tbody></table></div>
+    <div class="card"><h3>$ comprado por material</h3><div class="chartbox"><canvas id="chMat"></canvas></div></div>
+    <div class="card"><h3>Detalle</h3><table><thead><tr><th>Material</th><th class="n">Kg báscula</th><th class="n">Importe comprado</th><th class="n">Kg sin cuenta por pagar</th><th>Peso</th></tr></thead><tbody>
+    ${rows.map(x=>`<tr><td>${esc(x.m)}</td><td class="n">${fmtN(x.kg)}</td><td class="n">${fmt$(x.monto)}</td><td class="n">${fmtN(x.sin)}</td><td style="width:90px">${barRow(x.monto/max*100,'g')}</td></tr>`).join('')||'<tr><td colspan="5">Sin compras en el periodo</td></tr>'}
+    <tr class="tot"><td>TOTAL</td><td class="n">${fmtN(R.kgBascula)}</td><td class="n">${fmt$(R.comprasMonto)}</td><td class="n">${fmtN(R.kgSinCxp)}</td><td></td></tr></tbody></table></div>
   </div>`;
-  chart('chMat',{type:'bar',data:{labels:rows.map(r=>r[0]),datasets:[{label:'$',data:rows.map(r=>r[1].monto),backgroundColor:C_NAVY}]},
-    options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>fmt$(c.raw)+' · '+fmtN(rows[c.dataIndex][1].kg)+' kg'}}},scales:{x:{ticks:{callback:v=>fmt$(v)}}}}});
+  chart('chMat',{type:'bar',data:{labels:rows.map(r=>r.m),datasets:[{label:'$',data:rows.map(r=>r.monto),backgroundColor:C_NAVY}]},
+    options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>fmt$(c.raw)+' · '+fmtN(rows[c.dataIndex].kg)+' kg de báscula'}}},scales:{x:{ticks:{callback:v=>fmt$(v)}}}}});
 }
 
 /* ---------- VENTAS ---------- */
@@ -1043,7 +1053,7 @@ function rCxC(){
   <div class="lectura">🤝 <b>Cuentas por cobrar al día de hoy:</b> nos deben <b>${fmt$(R.cxcTotal)}</b> en <b>${cli.length}</b> clientes.
   ${cli[0]?`El mayor deudor es <b>${esc(cli[0][0])}</b> (${fmt$(cli[0][1].saldo)}, ${fmtPct(cli[0][1].saldo/R.cxcTotal*100)}).`:''}
   ${venc>0?`<b>${fmt$(venc)}</b> llevan más de 15 días sin cobrarse.`:''}
-  ${R.cxcTotal>0&&R.cxpTotal>0?` Cobrando todo cubrimos <b>${fmtPct(R.cxcTotal/R.cxpTotal*100)}</b> de lo que debemos.`:''}</div>
+  ${R.cxcTotal>0&&R.cxpTotalConSocios>0?` Cobrando todo cubrimos <b>${fmtPct(R.cxcTotal/R.cxpTotalConSocios*100)}</b> de lo que debemos (incluye socios).`:''}</div>
   <div class="grid g2">
     <div class="card"><h3>Saldo por cliente</h3><table><thead><tr><th>Cliente</th><th class="n">Saldo</th><th>Peso</th></tr></thead><tbody>
     ${cli.map(([c,x])=>`<tr><td>${esc(c)}</td><td class="n">${fmt$(x.saldo)}</td><td style="width:120px">${barRow(x.saldo/max*100,'g')}</td></tr>`).join('')||'<tr><td colspan="3">Sin saldos pendientes 🎉</td></tr>'}
