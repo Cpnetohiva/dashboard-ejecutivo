@@ -76,7 +76,7 @@ details table{margin:0 0 10px 18px;width:calc(100% - 18px)}
 .rm-imp-head{display:none}
 @page{size:letter portrait;margin:1.2cm}
 @media print{
-  [hidden]{display:none!important}
+  [hidden],.panel[hidden]{display:none!important}
   header .btn,nav,.noprint,button{display:none!important}
   header,nav{position:static}
   .panel{display:block!important;page-break-inside:avoid}
@@ -205,8 +205,16 @@ const COLS = {
 };
 const UNIDAD_PZ = /^(CAJA|TAMBO)/i;           // productos que se venden por pieza
 const SUFIJO_USUARIO = '@everplastic.local';
+// Interruptor de acceso: en false el tablero queda en revisión y solo entran los correos de CORREOS_PERMITIDOS (en minúsculas).
+// A cualquier otro usuario (o al modo demo) se le cierra la sesión y no se lee ninguna colección. En true entra cualquier usuario, como antes.
+const DASHBOARD_PUBLICO = false;
+const CORREOS_PERMITIDOS = ['admin@everplastic.local'];
+const MSG_EN_REVISION = '🛠 En mantenimiento. Estamos validando las cifras del dashboard. Lo habilitaremos en cuanto sean confiables.';
+const correoPermitido = email => DASHBOARD_PUBLICO || CORREOS_PERMITIDOS.some(c => String(c).toLowerCase() === String(email||'').trim().toLowerCase());
 // Interruptor del inventario: en false se oculta la pestaña, su panel y toda cifra de inventario del tablero. El código y calc() se conservan.
 const MOSTRAR_INVENTARIO = false;
+// Interruptor del punto de equilibrio: en false se oculta la pestaña, su panel, la tarjeta y la frase del Resumen. peCalc, peParams, rPE y R.cfAuto/R.mcAuto se conservan.
+const MOSTRAR_PUNTO_EQUILIBRIO = false;
 // Colecciones que solo alimentan el inventario (calc() las usa únicamente en el cálculo de inventario y en R.precioMat, que solo valúa inventario).
 // Con el interruptor en false no se leen: DB[k]=[] y sin aviso de colección no leída. 'destaraje' NO está aquí: R.kgBascula (Materiales) la usa.
 const COLS_SOLO_INVENTARIO = ['invIni','inv','prod','precios'];
@@ -215,6 +223,11 @@ if(!MOSTRAR_INVENTARIO){
   const bi=document.querySelector('nav button[data-p="inventario"]'), pi=document.getElementById('p-inventario');
   if(bi) bi.hidden=true;
   if(pi) pi.hidden=true;
+}
+if(!MOSTRAR_PUNTO_EQUILIBRIO){
+  const be=document.querySelector('nav button[data-p="pe"]'), pe_=document.getElementById('p-pe');
+  if(be) be.hidden=true;
+  if(pe_) pe_.hidden=true;
 }
 
 /* ======================================================================
@@ -295,7 +308,27 @@ $('btnDemo').onclick = async ()=>{ DEMO=true; await arrancar(); };
 $('btnSalir').onclick = ()=>{ if(auth) auth.signOut(); location.reload(); };
 $('btnRef').onclick = ()=>cargarYRender();
 
+// Bloqueo de acceso (DASHBOARD_PUBLICO = false): cierra la sesión, oculta la app y muestra el aviso en la pantalla de acceso. No lee Firestore.
+async function bloquearAcceso(){
+  try{ if(auth) await auth.signOut(); }catch(e){}
+  DB=null;
+  $('app').style.display='none';
+  $('login').style.display='';
+  $('loginErr').textContent=MSG_EN_REVISION;
+}
+// Sesión que el navegador ya trae guardada al cargar la página: si no está permitida se cierra de inmediato (sin leer colecciones).
+function revisarSesionGuardada(){
+  if(DASHBOARD_PUBLICO) return;
+  try{
+    const cfg=getCfg(); if(!cfg) return;
+    if(!firebase.apps.length) firebase.initializeApp(cfg);
+    auth=firebase.auth();
+    const dejar=auth.onAuthStateChanged(u=>{ dejar(); if(u && !correoPermitido(u.email)) bloquearAcceso(); });
+  }catch(e){}
+}
+
 async function arrancar(){
+  if(!DASHBOARD_PUBLICO && (DEMO || !correoPermitido(auth && auth.currentUser && auth.currentUser.email))){ await bloquearAcceso(); return; }
   $('login').style.display='none'; $('app').style.display='block';
   $('subTitle').textContent = DEMO?'MODO DEMO · datos ficticios':'Conectado · '+(auth&&auth.currentUser?auth.currentUser.email:'');
   await cargarYRender();
@@ -495,7 +528,7 @@ function rmTablaRubro(titulo,filas){
 /* ======================================================================
    CxP AL CORTE (reconstruida con abonos y fechas, NO con el campo saldo de hoy)
    saldo(c, C) = total - suma de abonos vigentes al corte C, para cuentas con fechaTicket <= C.
-   Abono vigente en C: fecha <= C y, si fue revertido, fechaReversion > C. Los precios de material no manejan IVA: total tal cual.
+   Abono vigente en C: solo los de c.abonos con fecha <= C. Un abono revertido no cuenta en ningún corte. Los precios de material no manejan IVA: total tal cual.
    ====================================================================== */
 let COL_FALLAS=[]; // colecciones que no se pudieron leer en la última carga
 const verSocioG=c=>incluirSocios()||!esProveedorSocio(c.proveedor); // mismo interruptor que calc()
@@ -504,8 +537,7 @@ const diaAnterior=f=>{ const [y,m,d]=f.split('-').map(Number); return iso(new Da
 const esSaldoInicialCta=c=>c.tipo==='saldo_inicial'||(c.aprobacion&&c.aprobacion.tipo==='saldo_inicial');
 function abonosVigentesAl(c,C,campoFecha){
   if(dia10(c[campoFecha])>C) return [];
-  const act=(a,rev)=>dia10(a.fecha)<=C && !(rev && dia10(a.fechaReversion)<=C);
-  return (c.abonos||[]).filter(a=>act(a,false)).concat((c.abonosRevertidos||[]).filter(a=>act(a,true)));
+  return (c.abonos||[]).filter(a=>dia10(a.fecha)<=C);
 }
 function cxpAlCorteDet(C){
   const filas=(DB.cxp||[]).filter(verSocioG).filter(c=>dia10(c.fechaTicket)<=C).map(c=>({c,saldo:num(c.total)-sum(abonosVigentesAl(c,C,'fechaTicket'),a=>num(a.monto))}));
@@ -514,8 +546,17 @@ function cxpAlCorteDet(C){
 function saldoCxpAlCorte(C){ return cxpAlCorteDet(C).total; }
 
 // Autoprueba (solo consola): el saldo reconstruido a hoy debe igualar R.cxpTotal con el mismo estado del interruptor de socios.
+// Puente simplificado del mes: saldo inicial + compras + saldo inicial del sistema − abonos vigentes del mes = saldo final.
+function puenteCxPMes(desde,hasta){
+  const ini=diaAnterior(desde), Di=cxpAlCorteDet(ini), Df=cxpAlCorteDet(hasta), cuentas=(DB.cxp||[]).filter(verSocioG);
+  const alta=sum(cuentas.filter(c=>{ const f=dia10(c.fechaTicket); return f>=desde&&f<=hasta; }),c=>num(c.total));
+  const ab=sum(cuentas,c=>{ const aIni=new Set(abonosVigentesAl(c,ini,'fechaTicket')); return sum(abonosVigentesAl(c,hasta,'fechaTicket').filter(a=>!aIni.has(a)),a=>num(a.monto)); });
+  return {final:Df.todo, calculado:Di.todo+alta-ab};
+}
 function autopruebaCxP(){
   if(!R||!DB||!DB.cxp) return;
+  const pm=puenteCxPMes(HOY.slice(0,8)+'01',HOY);
+  if(Math.abs(pm.calculado-pm.final)>0.5) console.warn('Autoprueba CxP: el puente del mes no cuadra · calculado '+fmt$2(pm.calculado)+' ≠ final '+fmt$2(pm.final));
   const det=cxpAlCorteDet(HOY), dif=det.total-R.cxpTotal;
   if(Math.abs(dif)<=0.5){ console.info('Autoprueba CxP OK: saldoCxpAlCorte(HOY) = R.cxpTotal = '+fmt$2(R.cxpTotal)); return; }
   console.warn('Autoprueba CxP: saldoCxpAlCorte(HOY) '+fmt$2(det.total)+' ≠ R.cxpTotal '+fmt$2(R.cxpTotal)+' · diferencia '+fmt$2(dif));
@@ -532,14 +573,13 @@ function rmBloqueCxP(desde,hasta,Rm){
   const delMes=cuentas.filter(c=>{ const f=dia10(c.fechaTicket); return f>=desde&&f<=hasta; });
   const compras=sum(delMes.filter(c=>!esSaldoInicialCta(c)),c=>num(c.total));
   const siSis=delMes.filter(esSaldoInicialCta), siSisM=sum(siSis,c=>num(c.total));
-  // Abonos del mes = vigentes al cierre y no vigentes al inicio; reversiones = vigentes al inicio y ya no al cierre. Así el puente es exacto.
-  let abEf=0, abSaf=0, rev=0;
+  // Abonos del mes = vigentes al cierre y no vigentes al inicio. Los revertidos no cuentan en ningún corte.
+  let abEf=0, abSaf=0;
   cuentas.forEach(c=>{
-    const aIni=new Set(abonosVigentesAl(c,ini,'fechaTicket')), aFin=abonosVigentesAl(c,hasta,'fechaTicket'), sFin=new Set(aFin);
+    const aIni=new Set(abonosVigentesAl(c,ini,'fechaTicket')), aFin=abonosVigentesAl(c,hasta,'fechaTicket');
     aFin.forEach(a=>{ if(aIni.has(a)) return; if(/saldo a favor/i.test(String(a.referencia||''))) abSaf+=num(a.monto); else abEf+=num(a.monto); });
-    aIni.forEach(a=>{ if(!sFin.has(a)) rev+=num(a.monto); });
   });
-  const final=Df.todo, calculado=Di.todo+compras+siSisM-abEf-abSaf+rev;
+  const final=Df.todo, calculado=Di.todo+compras+siSisM-abEf-abSaf;
   const socios=incluirSocios();
   const conIva=delMes.filter(c=>num(c.iva)!==0).length;
   const avisos=[];
@@ -561,7 +601,7 @@ function rmBloqueCxP(desde,hasta,Rm){
     ?`<table><tbody><tr><td>Saldo CxP al ${fdate(hasta)}</td><td class="n">${rmM(Df.total)}</td></tr>
       <tr><td>Saldo a favor de proveedores (anticipos) al ${fdate(hasta)}</td><td class="n">${rmM(saf)}</td></tr>
       <tr class="tot"><td>Exposición neta</td><td class="n">${rmM(Df.total-saf)}</td></tr></tbody></table>
-      <div class="note">Exposición neta = saldo CxP − saldo a favor. El saldo a favor suma los movimientos no revertidos con fecha hasta el corte; los movimientos revertidos no guardan fecha de reversión y se excluyen en todos los cortes.</div>`
+      <div class="note">Exposición neta = saldo CxP − saldo a favor. El saldo a favor suma los movimientos no revertidos con fecha hasta el corte; los movimientos revertidos no cuentan en ningún corte.</div>`
     :`<div class="note">No se pudo leer la colección «proveedores» (permisos o nombre distinto): el saldo a favor y la exposición neta no están disponibles. El resto del bloque no depende de ella.</div>`;
 
   return `<h2>3 · Cuentas por pagar (CxP)</h2>
@@ -574,7 +614,6 @@ function rmBloqueCxP(desde,hasta,Rm){
     ${siSis.length?`<tr><td>+ Saldo inicial del sistema<div class="note" style="margin:0">${siSis.length} cuenta${siSis.length===1?'':'s'} tipo saldo inicial con fecha dentro del mes</div></td><td class="n">${rmM(siSisM)}</td></tr>`:''}
     <tr><td>− Abonos del mes en efectivo</td><td class="n">${rmM(-abEf)}</td></tr>
     <tr><td>− Abonos del mes con saldo a favor aplicado</td><td class="n">${rmM(-abSaf)}</td></tr>
-    ${Math.abs(rev)>0.005?`<tr><td>+ Abonos revertidos en el mes<div class="note" style="margin:0">Abonos de meses anteriores que se revirtieron dentro de este mes</div></td><td class="n">${rmM(rev)}</td></tr>`:''}
     <tr class="tot"><td>= Saldo final (al ${fdate(hasta)})</td><td class="n">${rmM(final)}</td></tr></tbody></table></div>
   <div class="card" style="margin-bottom:14px"><h3>Top de proveedores por saldo al ${fdate(hasta)}</h3><table><thead><tr><th>Proveedor</th><th class="n">Saldo</th><th class="n">% del total</th></tr></thead><tbody>
     ${filasTop||'<tr><td colspan="3" class="note">Sin saldos pendientes al corte</td></tr>'}
@@ -588,8 +627,7 @@ function rmBloqueCxP(desde,hasta,Rm){
    ====================================================================== */
 function abonosCxcAl(c,C){
   if(dia10(c.fechaVenta||c.fecha)>C) return [];
-  const act=(a,rev)=>dia10(a.fecha)<=C && !(rev && dia10(a.fechaReversion)<=C);
-  return (c.abonos||[]).filter(a=>act(a,false)).concat((c.abonosRevertidos||[]).filter(a=>act(a,true)));
+  return (c.abonos||[]).filter(a=>dia10(a.fecha)<=C);
 }
 function cxcAlCorteDet(C){
   const filas=(DB.cxc||[]).filter(c=>dia10(c.fechaVenta||c.fecha)<=C).map(c=>({c,saldo:num(c.total)-sum(abonosCxcAl(c,C),a=>num(a.monto))}));
@@ -598,8 +636,17 @@ function cxcAlCorteDet(C){
 function saldoCxcAlCorte(C){ return cxcAlCorteDet(C).total; }
 
 // Autoprueba (solo consola): el saldo reconstruido a hoy debe igualar R.cxcTotal.
+// Puente simplificado del mes: saldo inicial + generado − abonos vigentes del mes = saldo final.
+function puenteCxCMes(desde,hasta){
+  const ini=diaAnterior(desde), Di=cxcAlCorteDet(ini), Df=cxcAlCorteDet(hasta), cuentas=DB.cxc||[];
+  const gen=sum(cuentas.filter(c=>{ const f=dia10(c.fechaVenta||c.fecha); return f>=desde&&f<=hasta; }),c=>num(c.total));
+  const ab=sum(cuentas,c=>{ const aIni=new Set(abonosCxcAl(c,ini)); return sum(abonosCxcAl(c,hasta).filter(a=>!aIni.has(a)),a=>num(a.monto)); });
+  return {final:Df.todo, calculado:Di.todo+gen-ab};
+}
 function autopruebaCxC(){
   if(!R||!DB||!DB.cxc) return;
+  const pm=puenteCxCMes(HOY.slice(0,8)+'01',HOY);
+  if(Math.abs(pm.calculado-pm.final)>0.5) console.warn('Autoprueba CxC: el puente del mes no cuadra · calculado '+fmt$2(pm.calculado)+' ≠ final '+fmt$2(pm.final));
   const det=cxcAlCorteDet(HOY), dif=det.total-R.cxcTotal;
   if(Math.abs(dif)<=0.5){ console.info('Autoprueba CxC OK: saldoCxcAlCorte(HOY) = R.cxcTotal = '+fmt$2(R.cxcTotal)); return; }
   console.warn('Autoprueba CxC: saldoCxcAlCorte(HOY) '+fmt$2(det.total)+' ≠ R.cxcTotal '+fmt$2(R.cxcTotal)+' · diferencia '+fmt$2(dif));
@@ -615,13 +662,12 @@ function rmBloqueCxC(desde,hasta,Rm){
   const cuentas=DB.cxc||[];
   const delMes=cuentas.filter(c=>{ const f=dia10(c.fechaVenta||c.fecha); return f>=desde&&f<=hasta; });
   const generado=sum(delMes,c=>num(c.total));
-  let cobEf=0, cobSaf=0, rev=0;
+  let cobEf=0, cobSaf=0;
   cuentas.forEach(c=>{
-    const aIni=new Set(abonosCxcAl(c,ini)), aFin=abonosCxcAl(c,hasta), sFin=new Set(aFin);
+    const aIni=new Set(abonosCxcAl(c,ini)), aFin=abonosCxcAl(c,hasta);
     aFin.forEach(a=>{ if(aIni.has(a)) return; if(/saldo a favor/i.test(String(a.referencia||''))) cobSaf+=num(a.monto); else cobEf+=num(a.monto); });
-    aIni.forEach(a=>{ if(!sFin.has(a)) rev+=num(a.monto); });
   });
-  const final=Df.todo, calculado=Di.todo+generado-cobEf-cobSaf+rev;
+  const final=Df.todo, calculado=Di.todo+generado-cobEf-cobSaf;
   // Cobros del mes ligados a una cuenta (cxcId) y no revertidos: deben coincidir con los abonos en efectivo.
   const cobLig=sum((DB.cobros||[]).filter(k=>!k.revertido&&k.cxcId&&dia10(k.fecha)>=desde&&dia10(k.fecha)<=hasta),k=>num(k.pagado));
   const conIva=delMes.filter(c=>num(c.ivaTrasladado)!==0||num(c.ivaRetenido)!==0).length;
@@ -645,7 +691,7 @@ function rmBloqueCxC(desde,hasta,Rm){
     ?`<table><tbody><tr><td>Saldo CxC al ${fdate(hasta)}</td><td class="n">${rmM(Df.total)}</td></tr>
       <tr><td>Anticipos de clientes (saldo a favor) al ${fdate(hasta)}</td><td class="n">${rmM(saf)}</td></tr>
       <tr class="tot"><td>Exposición neta</td><td class="n">${rmM(Df.total-saf)}</td></tr></tbody></table>
-      <div class="note">Exposición neta = saldo CxC − anticipos de clientes. Suma los movimientos no revertidos con fecha hasta el corte; los movimientos revertidos no guardan fecha de reversión y se excluyen en todos los cortes.</div>`
+      <div class="note">Exposición neta = saldo CxC − anticipos de clientes. Suma los movimientos no revertidos con fecha hasta el corte; los movimientos revertidos no cuentan en ningún corte.</div>`
     :`<div class="note">No se pudo leer la colección «clientes» (permisos o nombre distinto): los anticipos de clientes y la exposición neta no están disponibles. El resto del bloque no depende de ella.</div>`;
 
   return `<h2>4 · Cuentas por cobrar (CxC)</h2>
@@ -656,7 +702,6 @@ function rmBloqueCxC(desde,hasta,Rm){
     <tr><td>+ Generado en el mes (ventas)</td><td class="n">${rmM(generado)}</td></tr>
     <tr><td>− Cobrado en el mes en efectivo</td><td class="n">${rmM(-cobEf)}</td></tr>
     <tr><td>− Cobrado en el mes con saldo a favor aplicado</td><td class="n">${rmM(-cobSaf)}</td></tr>
-    ${Math.abs(rev)>0.005?`<tr><td>+ Cobros revertidos en el mes<div class="note" style="margin:0">Abonos de meses anteriores que se revirtieron dentro de este mes</div></td><td class="n">${rmM(rev)}</td></tr>`:''}
     <tr class="tot"><td>= Saldo final (al ${fdate(hasta)})</td><td class="n">${rmM(final)}</td></tr></tbody></table></div>
   <div class="card" style="margin-bottom:14px"><h3>Top de clientes por saldo al ${fdate(hasta)}</h3><table><thead><tr><th>Cliente</th><th class="n">Saldo</th><th class="n">% del total</th></tr></thead><tbody>
     ${filasTop||'<tr><td colspan="3" class="note">Sin saldos pendientes al corte</td></tr>'}
@@ -766,7 +811,7 @@ function renderAll(){
   const chk=$('chkSocios'); if(chk) chk.checked=incluirSocios();
   const tag=$('tagSocios'); if(tag) tag.style.display=incluirSocios()?'none':'';
   calcPeriodo(); R=calc();
-  rResumen(); rMateriales(); rVentas(); if(MOSTRAR_INVENTARIO) rInventario(); rCxP(); rCxC(); rPE();
+  rResumen(); rMateriales(); rVentas(); if(MOSTRAR_INVENTARIO) rInventario(); rCxP(); rCxC(); if(MOSTRAR_PUNTO_EQUILIBRIO) rPE();
   try{ rReporteMensual(); }catch(e){ const c=$('rmCuerpo'); if(c) c.innerHTML='<div class="warnbar">No se pudo armar el reporte mensual: '+esc(e.message)+'</div>'; }
 }
 
@@ -839,7 +884,7 @@ function rResumen(){
   La inversión en activos fue <b class="${R.flujoInversion<0?'neg':'pos'}">${fmt$(R.flujoInversion)}</b>,
   el de financiamiento <b class="${R.flujoFinanciamiento<0?'neg':'pos'}">${fmt$(R.flujoFinanciamiento)}</b> y el flujo neto de efectivo <b class="${R.flujo<0?'neg':'pos'}">${fmt$(R.flujo)}</b>.
   Hoy <b>debemos ${fmt$(R.cxpTotal)}</b> a proveedores y <b>nos deben ${fmt$(R.cxcTotal)}</b>.
-  ${pe.pe>0?`En el mes en curso llevamos <b>${fmtPct(pe.cob*100)}</b> del punto de equilibrio.`:''}</div>
+  ${MOSTRAR_PUNTO_EQUILIBRIO&&pe.pe>0?`En el mes en curso llevamos <b>${fmtPct(pe.cob*100)}</b> del punto de equilibrio.`:''}</div>
 
   <h2>Flujo del periodo</h2>
   <h3 style="margin:0 0 8px;font-size:14px;color:var(--navy)">Operación</h3>
@@ -871,7 +916,7 @@ function rResumen(){
     ${kpi('warn','Nos deben (CxC)',fmt$(R.cxcTotal),R.cxcLista.length+' cuentas abiertas')}
     ${kpi('bad','Debemos (CxP)',fmt$(R.cxpTotal),Object.keys(R.cxpProv).length+' proveedores con saldo')}
     ${MOSTRAR_INVENTARIO?kpi(neto<0?'bad':'ok','Posición neta',fmt$(neto),'Inventario + CxC − CxP'):kpi(neto<0?'bad':'ok','Cuentas netas (CxC - CxP)',fmt$(R.cxcTotal-R.cxpTotal),'Nos deben menos debemos')}
-    ${kpi(cls,'Punto de equilibrio',pe.pe>0?fmtPct(pe.cob*100):'—',pe.pe>0?'Meta mensual: '+fmt$(pe.pe):'Captura costos fijos en la pestaña')}
+    ${MOSTRAR_PUNTO_EQUILIBRIO?kpi(cls,'Punto de equilibrio',pe.pe>0?fmtPct(pe.cob*100):'—',pe.pe>0?'Meta mensual: '+fmt$(pe.pe):'Captura costos fijos en la pestaña'):''}
   </div>
 
   <h2>Tendencia últimos 6 meses</h2>
@@ -1052,6 +1097,7 @@ function rPE(){
 
 /* ---------- NAV ---------- */
 function showTab(p){
+  if(p==='pe'&&!MOSTRAR_PUNTO_EQUILIBRIO) return; // pestaña oculta: no se puede abrir (clic, atajo o llamada)
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.p===p));
   document.querySelectorAll('.panel').forEach(s=>s.classList.toggle('on',s.id==='p-'+p));
   Object.values(charts).forEach(c=>c.resize());
@@ -1093,6 +1139,7 @@ function demoData(){
 
 /* ====================== INICIO ====================== */
 initLogin();
+revisarSesionGuardada();
 </script>
 </body>
 </html>
