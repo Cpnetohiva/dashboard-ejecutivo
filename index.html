@@ -410,6 +410,7 @@ function calc(){
   const ventaPorId={}; D.ventas.forEach(v=>ventaPorId[v.id]=v);
   const cobroSinIva=c=>{
     if(c.pagado==null) return num(c.monto??c.cobrado??c.total);
+    if(c.origen==='anticipo') return num(c.pagado); // anticipo de cliente: completo, sin restar iva ni prorratear (igual que js/utils.js)
     const pag=num(c.pagado), x=cxcPorId[c.cxcId];
     if(x&&num(x.total)>0){
       const sub=x.subtotal!=null?num(x.subtotal):num(x.total)-num(x.ivaTrasladado)+num(x.ivaRetenido||0);
@@ -423,7 +424,7 @@ function calc(){
     return pag-num(c.iva);
   };
   R.cobrado=sum(D.cobros.filter(c=>!c.revertido&&inP(c.fecha)),cobroSinIva);
-  R.pagado=sum(D.pagos.filter(p=>!p.revertido&&inP(p.fecha)),p=>num(p.pagado??p.monto??p.total)-num(p.iva||0));
+  R.pagado=sum(D.pagos.filter(p=>!p.revertido&&inP(p.fecha)),p=>num(p.pagado??p.monto??p.total)-(p.origen==='anticipo'?0:num(p.iva||0))); // el anticipo a proveedor cuenta completo
   R.anticipos=sum(D.pagos.filter(p=>!p.revertido&&p.origen==='anticipo'&&inP(p.fecha)),p=>num(p.pagado??p.monto??p.total));
   // Rubros del flujo (los mismos que el módulo Flujo de efectivo): inversión, financiamiento u operación; el 'Saldo inicial' se ignora.
   const montoGasto=g=>g.montoBase!=null?num(g.montoBase):num(g.total??g.monto);
@@ -632,14 +633,18 @@ function rmBloqueCxP(desde,hasta,Rm){
 
 /* ======================================================================
    CxC AL CORTE (misma lógica que CxP, con fechaVenta; no usa el campo saldo de hoy)
-   saldo(c, C) = total - abonos vigentes al corte C, para cuentas con fechaVenta <= C. Sin IVA aparte: total tal cual.
+   saldo(c, C) = subtotal - abonos vigentes al corte C prorrateados (monto x subtotal / total), para cuentas con fechaVenta <= C. Todo en base sin IVA.
    ====================================================================== */
+// Subtotal (sin IVA) de la cuenta: el guardado o total - IVA trasladado + IVA retenido.
+const subtotalCxc=c=>c.subtotal!=null?num(c.subtotal):num(c.total)-num(c.ivaTrasladado)+num(c.ivaRetenido||0);
+// Parte sin IVA de un monto cobrado a la cuenta: monto x subtotal / total (cubre el IVA retenido).
+const baseCxc=(monto,c)=>c&&num(c.total)>0?num(monto)*subtotalCxc(c)/num(c.total):num(monto);
 function abonosCxcAl(c,C){
   if(dia10(c.fechaVenta||c.fecha)>C) return [];
   return (c.abonos||[]).filter(a=>dia10(a.fecha)<=C);
 }
 function cxcAlCorteDet(C){
-  const filas=(DB.cxc||[]).filter(c=>dia10(c.fechaVenta||c.fecha)<=C).map(c=>({c,saldo:num(c.total)-sum(abonosCxcAl(c,C),a=>num(a.monto))}));
+  const filas=(DB.cxc||[]).filter(c=>dia10(c.fechaVenta||c.fecha)<=C).map(c=>({c,saldo:subtotalCxc(c)-sum(abonosCxcAl(c,C),a=>baseCxc(a.monto,c))}));
   return {filas, todo:sum(filas,f=>f.saldo), total:sum(filas.filter(f=>f.saldo>0.01),f=>f.saldo)};
 }
 function saldoCxcAlCorte(C){ return cxcAlCorteDet(C).total; }
@@ -648,19 +653,22 @@ function saldoCxcAlCorte(C){ return cxcAlCorteDet(C).total; }
 // Puente simplificado del mes: saldo inicial + generado − abonos vigentes del mes = saldo final.
 function puenteCxCMes(desde,hasta){
   const ini=diaAnterior(desde), Di=cxcAlCorteDet(ini), Df=cxcAlCorteDet(hasta), cuentas=DB.cxc||[];
-  const gen=sum(cuentas.filter(c=>{ const f=dia10(c.fechaVenta||c.fecha); return f>=desde&&f<=hasta; }),c=>num(c.total));
-  const ab=sum(cuentas,c=>{ const aIni=new Set(abonosCxcAl(c,ini)); return sum(abonosCxcAl(c,hasta).filter(a=>!aIni.has(a)),a=>num(a.monto)); });
+  const gen=sum(cuentas.filter(c=>{ const f=dia10(c.fechaVenta||c.fecha); return f>=desde&&f<=hasta; }),subtotalCxc);
+  const ab=sum(cuentas,c=>{ const aIni=new Set(abonosCxcAl(c,ini)); return sum(abonosCxcAl(c,hasta).filter(a=>!aIni.has(a)),a=>baseCxc(a.monto,c)); });
   return {final:Df.todo, calculado:Di.todo+gen-ab};
 }
 function autopruebaCxC(){
   if(!R||!DB||!DB.cxc) return;
   const pm=puenteCxCMes(HOY.slice(0,8)+'01',HOY);
   if(Math.abs(pm.calculado-pm.final)>0.5) console.warn('Autoprueba CxC: el puente del mes no cuadra · calculado '+fmt$2(pm.calculado)+' ≠ final '+fmt$2(pm.final));
-  const det=cxcAlCorteDet(HOY), dif=det.total-R.cxcTotal;
-  if(Math.abs(dif)<=0.5){ console.info('Autoprueba CxC OK: saldoCxcAlCorte(HOY) = R.cxcTotal = '+fmt$2(R.cxcTotal)); return; }
-  console.warn('Autoprueba CxC: saldoCxcAlCorte(HOY) '+fmt$2(det.total)+' ≠ R.cxcTotal '+fmt$2(R.cxcTotal)+' · diferencia '+fmt$2(dif));
+  // R.cxcTotal es el saldo guardado (con IVA); se lleva a base con la misma proporción subtotal / total para compararlo.
+  const baseSaldo=c=>{ const s=R.sCxc(c); return s>0.01?baseCxc(s,c):0; };
+  const cxcTotalBase=sum(DB.cxc||[],baseSaldo);
+  const det=cxcAlCorteDet(HOY), dif=det.total-cxcTotalBase;
+  if(Math.abs(dif)<=0.5){ console.info('Autoprueba CxC OK: saldoCxcAlCorte(HOY) = saldo guardado en base = '+fmt$2(cxcTotalBase)); return; }
+  console.warn('Autoprueba CxC: saldoCxcAlCorte(HOY) '+fmt$2(det.total)+' ≠ saldo guardado en base '+fmt$2(cxcTotalBase)+' · diferencia '+fmt$2(dif));
   const ef=x=>x>0.01?x:0, calc_=new Map(det.filas.map(f=>[f.c,f.saldo]));
-  const difs=(DB.cxc||[]).map(c=>{ const k=ef(calc_.get(c)||0), h=ef(R.sCxc(c)); return {id:c.id,cliente:c.cliente,folio:c.folio,fechaVenta:dia10(c.fechaVenta||c.fecha),total:num(c.total),reconstruido:k,campoSaldo:h,diferencia:Math.round((k-h)*100)/100}; })
+  const difs=(DB.cxc||[]).map(c=>{ const k=ef(calc_.get(c)||0), h=ef(baseSaldo(c)); return {id:c.id,cliente:c.cliente,folio:c.folio,fechaVenta:dia10(c.fechaVenta||c.fecha),total:num(c.total),reconstruido:k,campoSaldo:h,diferencia:Math.round((k-h)*100)/100}; })
     .filter(x=>Math.abs(x.diferencia)>0.005).sort((a,b)=>Math.abs(b.diferencia)-Math.abs(a.diferencia)).slice(0,5);
   console.table(difs);
 }
@@ -670,18 +678,17 @@ function rmBloqueCxC(desde,hasta,Rm){
   const ini=diaAnterior(desde), Di=cxcAlCorteDet(ini), Df=cxcAlCorteDet(hasta);
   const cuentas=DB.cxc||[];
   const delMes=cuentas.filter(c=>{ const f=dia10(c.fechaVenta||c.fecha); return f>=desde&&f<=hasta; });
-  const generado=sum(delMes,c=>num(c.total));
+  const generado=sum(delMes,subtotalCxc);
   let cobEf=0, cobSaf=0;
   cuentas.forEach(c=>{
     const aIni=new Set(abonosCxcAl(c,ini)), aFin=abonosCxcAl(c,hasta);
-    aFin.forEach(a=>{ if(aIni.has(a)) return; if(/saldo a favor/i.test(String(a.referencia||''))) cobSaf+=num(a.monto); else cobEf+=num(a.monto); });
+    aFin.forEach(a=>{ if(aIni.has(a)) return; if(/saldo a favor/i.test(String(a.referencia||''))) cobSaf+=baseCxc(a.monto,c); else cobEf+=baseCxc(a.monto,c); });
   });
   const final=Df.todo, calculado=Di.todo+generado-cobEf-cobSaf;
-  // Cobros del mes ligados a una cuenta (cxcId) y no revertidos: deben coincidir con los abonos en efectivo.
-  const cobLig=sum((DB.cobros||[]).filter(k=>!k.revertido&&k.cxcId&&dia10(k.fecha)>=desde&&dia10(k.fecha)<=hasta),k=>num(k.pagado));
-  const conIva=delMes.filter(c=>num(c.ivaTrasladado)!==0||num(c.ivaRetenido)!==0).length;
+  // Cobros del mes ligados a una cuenta (cxcId) y no revertidos, en base sin IVA: deben coincidir con los abonos en efectivo.
+  const cxcPorIdM={}; cuentas.forEach(c=>cxcPorIdM[c.id]=c);
+  const cobLig=sum((DB.cobros||[]).filter(k=>!k.revertido&&k.cxcId&&dia10(k.fecha)>=desde&&dia10(k.fecha)<=hasta),k=>baseCxc(k.pagado,cxcPorIdM[k.cxcId]));
   const avisos=[];
-  if(conIva>0) avisos.push(`${conIva} cuenta${conIva===1?'':'s'} del periodo ${conIva===1?'trae':'traen'} IVA trasladado o retenido distinto de 0. El reporte usa el total tal cual, sin prorrateos; revísalas.`);
   if(Math.abs(calculado-final)>0.5) avisos.push(`El puente no cuadra por ${rmM(calculado-final)}: revisa cuentas con fechas o abonos incompletos.`);
   if(Math.abs(generado-Rm.ventasMonto)>0.5) avisos.push(`Lo generado en el mes (${rmM(generado)}) no coincide con las ventas del tablero (${rmM(Rm.ventasMonto)}); diferencia ${rmM(generado-Rm.ventasMonto)}.`);
   if(Math.abs(cobEf-cobLig)>0.5) avisos.push(`Los abonos en efectivo del mes (${rmM(cobEf)}) no coinciden con los cobros ligados por cxcId (${rmM(cobLig)}); diferencia ${rmM(cobEf-cobLig)}.`);
@@ -704,7 +711,7 @@ function rmBloqueCxC(desde,hasta,Rm){
     :`<div class="note">No se pudo leer la colección «clientes» (permisos o nombre distinto): los anticipos de clientes y la exposición neta no están disponibles. El resto del bloque no depende de ella.</div>`;
 
   return `<h2>4 · Cuentas por cobrar (CxC)</h2>
-  <div class="note" style="margin-bottom:10px">Roll-forward con abonos y fechas, no con el campo saldo de hoy. Se usa el total de cada cuenta tal cual. Las cuentas por cobrar no se filtran por el interruptor de socios.</div>
+  <div class="note" style="margin-bottom:10px">Roll-forward con abonos y fechas, no con el campo saldo de hoy. Todo en base sin IVA: se usa el subtotal de cada cuenta y los cobros se prorratean (cobro × subtotal / total de la cuenta, lo que cubre el IVA retenido). Las cuentas por cobrar no se filtran por el interruptor de socios.</div>
   ${avisos.map(a=>`<div class="warnbar">${esc(a)}</div>`).join('')}
   <div class="card" style="margin-bottom:14px"><table><thead><tr><th>Concepto</th><th class="n">Importe</th></tr></thead><tbody>
     <tr><td>Saldo inicial (al ${fdate(ini)})</td><td class="n">${rmM(Di.todo)}</td></tr>
