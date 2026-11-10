@@ -74,6 +74,8 @@ details table{margin:0 0 10px 18px;width:calc(100% - 18px)}
 .pe-in label{font-size:12px;font-weight:700;color:var(--mut);display:block;margin-bottom:4px;text-transform:uppercase}
 @media(max-width:640px){.kpi .val{font-size:22px}nav{top:92px}}
 .rm-imp-head{display:none}
+.rm-dos{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:flex-start}
+@media(max-width:900px){.rm-dos{grid-template-columns:1fr}}
 @page{size:letter portrait;margin:1.2cm}
 @media print{
   [hidden],.panel[hidden]{display:none!important}
@@ -87,6 +89,8 @@ details table{margin:0 0 10px 18px;width:calc(100% - 18px)}
   #p-reporte .rm-imp-head{display:block;font-size:17px;font-weight:700;color:var(--navy);border-bottom:3px solid var(--gold);padding-bottom:6px;margin-bottom:12px}
   #p-reporte .card{box-shadow:none;border:1px solid var(--line);break-inside:avoid;page-break-inside:avoid}
   #p-reporte .grid{grid-template-columns:repeat(3,1fr);break-inside:avoid}
+  #p-reporte .rm-dos{grid-template-columns:1fr}
+  #p-reporte .rm-dos>div{break-inside:avoid;page-break-inside:avoid;min-width:0}
   #p-reporte .lectura,#p-reporte .warnbar,#p-reporte .note{break-inside:avoid}
   #p-reporte h2{break-after:avoid;page-break-after:avoid}
   #p-reporte h2:not(:first-of-type){break-before:page;page-break-before:always}
@@ -841,22 +845,27 @@ function rReporteMensual(){
   }
 
   /* ---------- Bloque 2: material ---------- */
-  const claves=[...new Set(Object.keys(Rm.kgBasculaMat).concat(Object.keys(Rm.compras),Object.keys(Rm.ventas)))];
-  const filas=claves.map(k=>{
-    const c=Rm.compras[k]||{kg:0,monto:0}, v=Rm.ventas[k]||{cant:0,monto:0}, pz=Rm.ventasUnidad[k]==='PZ';
-    return {k,ck:Rm.kgBasculaMat[k]?Rm.kgBasculaMat[k].kg:0,cm:c.monto,vk:pz?0:v.cant,vp:pz?v.cant:0,vm:v.monto};
-  }).sort((a,b)=>(b.cm+b.vm)-(a.cm+a.vm));
-  const T={ck:sum(filas,x=>x.ck),cm:sum(filas,x=>x.cm),vk:sum(filas,x=>x.vk),vp:sum(filas,x=>x.vp),vm:sum(filas,x=>x.vm)};
-  const dif=(a,b,f)=>`<td class="n ${a-b<0?'neg':''}">${f(a-b)}</td>`;
-  const fila=x=>`<td class="n">${fmtN(x.ck)}</td><td class="n">${rmM(x.cm)}</td><td class="n">${fmtN(x.vk)}</td><td class="n">${x.vp?fmtN(x.vp):'—'}</td><td class="n">${rmM(x.vm)}</td>${dif(x.ck,x.vk,n=>fmtN(n))}${dif(x.cm,x.vm,rmM)}`;
+  // Dos tablas independientes (catálogos distintos: entran materiales, salen productos terminados); sin diferencias entre ellas.
+  const entradas=Object.keys(Rm.kgBasculaMat).concat(Object.keys(Rm.compras)).filter((k,i,a)=>a.indexOf(k)===i).map(k=>({k,kg:Rm.kgBasculaMat[k]?Rm.kgBasculaMat[k].kg:0,monto:Rm.compras[k]?Rm.compras[k].monto:0}))
+    .filter(x=>x.kg>0||x.monto>0).sort((a,b)=>b.kg-a.kg||b.monto-a.monto);
+  const salidas=Object.keys(Rm.ventas).map(k=>{ const v=Rm.ventas[k], pz=Rm.ventasUnidad[k]==='PZ'; return {k,kg:pz?0:v.cant,pz:pz?v.cant:0,monto:v.monto}; })
+    .filter(x=>x.kg>0||x.pz>0||x.monto>0).sort((a,b)=>b.monto-a.monto||b.kg-a.kg);
+  const TE={kg:sum(entradas,x=>x.kg),monto:sum(entradas,x=>x.monto)};
+  const TS={kg:sum(salidas,x=>x.kg),pz:sum(salidas,x=>x.pz),monto:sum(salidas,x=>x.monto)};
+  const guion=(n,f)=>n>0?f(n):'—';
   const socios=incluirSocios();
-  html+=`<h2>2 · Material: entradas vs salidas</h2>
+  html+=`<h2>2 · Material: entradas y salidas del mes</h2>
   <div style="margin-bottom:10px"><span class="pill ${socios?'ok':'warn'}">Importes: material de socios ${socios?'incluido':'excluido'}</span>
     <span class="note" style="display:inline;margin-left:8px">El interruptor «Incluir material de socios» aplica solo a importes. Los kg de entradas son siempre los de la báscula completa.</span></div>
-  <div class="card"><table><thead><tr><th>Material</th><th class="n">Entradas kg</th><th class="n">Entradas $</th><th class="n">Salidas kg</th><th class="n">Salidas pzas</th><th class="n">Salidas $</th><th class="n" style="white-space:normal;min-width:84px">Diferencia (compras - ventas del mes) kg</th><th class="n" style="white-space:normal;min-width:84px">Diferencia (compras - ventas del mes) $</th></tr></thead><tbody>
-  ${filas.map(x=>`<tr><td>${esc(x.k)}</td>${fila(x)}</tr>`).join('')||'<tr><td colspan="8" class="note">Sin compras ni ventas de material en el mes</td></tr>'}
-  <tr class="tot"><td>TOTAL</td>${fila(T)}</tr></tbody></table>
-  <div class="note">Kg de entradas: báscula completa. Importe de entradas: cuenta por pagar, con el interruptor de socios aplicado. Montos de material, no efectivo. No representa variación de inventario.</div></div>`;
+  <div class="card"><div class="rm-dos">
+    <div><h3>Entradas de material</h3><table><thead><tr><th>Material</th><th class="n">Kg</th><th class="n">Importe</th></tr></thead><tbody>
+    ${entradas.map(x=>`<tr><td>${esc(x.k)}</td><td class="n">${fmtN(x.kg)}</td><td class="n">${guion(x.monto,rmM)}</td></tr>`).join('')||'<tr><td colspan="3" class="note">Sin movimientos en el mes</td></tr>'}
+    ${entradas.length?`<tr class="tot"><td>TOTAL</td><td class="n">${fmtN(TE.kg)}</td><td class="n">${rmM(TE.monto)}</td></tr>`:''}</tbody></table></div>
+    <div><h3>Salidas de producto terminado</h3><table><thead><tr><th>Producto</th><th class="n">Kg</th><th class="n">Piezas</th><th class="n">Importe</th></tr></thead><tbody>
+    ${salidas.map(x=>`<tr><td>${esc(x.k)}</td><td class="n">${guion(x.kg,n=>fmtN(n))}</td><td class="n">${guion(x.pz,n=>fmtN(n))}</td><td class="n">${rmM(x.monto)}</td></tr>`).join('')||'<tr><td colspan="4" class="note">Sin movimientos en el mes</td></tr>'}
+    ${salidas.length?`<tr class="tot"><td>TOTAL</td><td class="n">${fmtN(TS.kg)}</td><td class="n">${fmtN(TS.pz)}</td><td class="n">${rmM(TS.monto)}</td></tr>`:''}</tbody></table></div>
+  </div>
+  <div class="note">Kg de entradas: báscula completa. Importe de entradas: cuenta por pagar, con el interruptor de socios aplicado. Salidas: ventas del mes sin IVA. Montos de material, no efectivo.</div></div>`;
   html+=rmBloqueCxP(desde,hasta,Rm);
   html+=rmBloqueCxC(desde,hasta,Rm);
   cuerpo.innerHTML=html;
