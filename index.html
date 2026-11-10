@@ -70,6 +70,8 @@ details table{margin:0 0 10px 18px;width:calc(100% - 18px)}
 .err{color:var(--bad);font-size:13px;margin-top:10px}
 .warnbar{background:#fff0d1;border:1px solid #f3cf7c;color:#7a5200;border-radius:10px;padding:9px 14px;margin-bottom:12px;font-size:13px}
 .rango{display:none;gap:6px;align-items:center}
+/* El Reporte mensual tiene su propio selector de mes: el selector de periodo del encabezado (y sus fechas) solo se ve en las pestañas que lo usan. Se oculta sin quitar los elementos ni cambiar su valor. */
+body.sin-periodo #selPeriodo,body.sin-periodo #rangoBox{display:none!important}
 .pe-in{display:flex;gap:16px;flex-wrap:wrap;align-items:end}
 .pe-in label{font-size:12px;font-weight:700;color:var(--mut);display:block;margin-bottom:4px;text-transform:uppercase}
 @media(max-width:640px){.kpi .val{font-size:22px}nav{top:92px}}
@@ -105,7 +107,7 @@ details table{margin:0 0 10px 18px;width:calc(100% - 18px)}
 }
 </style>
 </head>
-<body>
+<body class="sin-periodo">
 
 <!-- ================= LOGIN / CONFIG ================= -->
 <div id="login">
@@ -1119,6 +1121,7 @@ function rPE(){
 /* ---------- NAV ---------- */
 function showTab(p){
   if(p==='pe'&&!MOSTRAR_PUNTO_EQUILIBRIO) return; // pestaña oculta: no se puede abrir (clic, atajo o llamada)
+  document.body.classList.toggle('sin-periodo',p==='reporte'); // el selector de periodo no aplica al Reporte mensual
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.p===p));
   document.querySelectorAll('.panel').forEach(s=>s.classList.toggle('on',s.id==='p-'+p));
   Object.values(charts).forEach(c=>c.resize());
