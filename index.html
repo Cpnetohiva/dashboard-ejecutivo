@@ -149,7 +149,7 @@ details table{margin:0 0 10px 18px;width:calc(100% - 18px)}
       <span id="tagSocios" style="display:none;background:#e69500;color:#fff;border-radius:10px;padding:2px 8px;font-size:12px;font-weight:600">importes sin material de socios</span>
       <span class="rango" id="rangoBox"><input type="date" id="fDesde"><input type="date" id="fHasta"></span>
       <button class="btn ghost" id="btnRef">↻ Actualizar</button>
-      <button class="btn ghost" onclick="window.print()">🖨 Imprimir</button>
+      <button class="btn ghost" onclick="imprimirConGraficas()">🖨 Imprimir</button>
       <button class="btn ghost" id="btnSalir">Salir</button>
     </div>
   </div>
@@ -246,7 +246,11 @@ const norm = s => String(s||'').trim().toUpperCase();
 const PROVEEDORES_SOCIOS = ['GERMAN','MARIO M'];
 const limpiaSocio = s => String(s==null?'':s).normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim().toUpperCase();
 function esProveedorSocio(nombre){ const k=limpiaSocio(nombre); return !!k && PROVEEDORES_SOCIOS.some(s=>limpiaSocio(s)===k); }
-function incluirSocios(){ try{ return localStorage.getItem('dash_incluir_socios')!=='0'; }catch(e){ return true; } }
+// Interruptor de material de socios: SIEMPRE arranca excluido al abrir; no se lee ninguna elección guardada de sesiones anteriores.
+// Cambia solo en memoria durante la sesión (el checkbox lo actualiza); la clave vieja se borra para que no quede rastro.
+let INCLUIR_SOCIOS=false;
+try{ localStorage.removeItem('dash_incluir_socios'); }catch(e){}
+function incluirSocios(){ return INCLUIR_SOCIOS; }
 const sum = (a,f) => a.reduce((t,x)=>t+f(x),0);
 const MESES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
 const mesLbl = k => MESES[+k.slice(5,7)-1]+' '+k.slice(2,4);
@@ -266,6 +270,54 @@ function chart(id, cfg){
   const el=$(id); if(!el) return;
   charts[id]=new Chart(el.getContext('2d'),cfg);
 }
+/* Impresión de gráficas. Causa de las gráficas en blanco: renderAll() crea TODAS las gráficas mientras su pestaña está oculta
+   (.panel{display:none}); con responsive:true Chart.js mide 0×0 y dibuja en un canvas vacío. Al imprimir, @media print vuelve
+   visibles los paneles, pero Chart.js aún no remide (ResizeObserver) y la animación de 1 s no ha pintado: sale el hueco en blanco.
+   Solución: antes de imprimir cada gráfica se redibuja sin animación y con tamaño fijo, y se reemplaza por una imagen de su canvas;
+   en afterprint se restauran las interactivas. Idempotente: la llama el botón y el evento beforeprint (Ctrl+P). */
+const IMP_ANCHO=680, IMP_ALTO=300;
+let impGraficas=null;
+function prepararGraficasParaImprimir(){
+  if(impGraficas) return impGraficas.imgs;           // ya preparadas (botón + beforeprint)
+  impGraficas={items:[],imgs:[]};
+  Object.keys(charts).forEach(id=>{
+    try{
+      const ch=charts[id], canvas=ch&&ch.canvas, padre=canvas&&canvas.parentNode;
+      if(!ch||!canvas||!padre) return;
+      const item={id,ch,canvas,display:canvas.style.display,responsive:ch.options.responsive,animation:ch.options.animation,img:null};
+      impGraficas.items.push(item);                  // se registra antes de tocar la gráfica: así siempre se restaura
+      ch.options.animation=false; ch.options.responsive=false;
+      ch.resize(IMP_ANCHO,IMP_ALTO); ch.update('none');
+      const url=typeof ch.toBase64Image==='function'?ch.toBase64Image():canvas.toDataURL('image/png');
+      const img=document.createElement('img');
+      img.className='chart-imp'; img.alt='Gráfica'; img.src=url;
+      img.style.cssText='display:block;width:100%;height:'+IMP_ALTO+'px;object-fit:contain';
+      canvas.style.display='none'; padre.appendChild(img);
+      item.img=img; impGraficas.imgs.push(img);
+    }catch(e){ /* una gráfica sin datos o con error no debe frenar la impresión: se imprime su contenedor */ }
+  });
+  return impGraficas.imgs;
+}
+function restaurarGraficasDespuesDeImprimir(){
+  const est=impGraficas; if(!est) return; impGraficas=null;
+  let falla=false;
+  est.items.forEach(it=>{
+    try{
+      if(it.img&&it.img.parentNode) it.img.parentNode.removeChild(it.img);
+      it.canvas.style.display=it.display||'';
+      it.ch.options.animation=it.animation; it.ch.options.responsive=it.responsive;
+      it.ch.update('none'); it.ch.resize();
+    }catch(e){ falla=true; }
+  });
+  if(falla){ try{ renderAll(); }catch(e){} }         // último recurso: vuelve a crear las gráficas interactivas
+}
+function imprimirConGraficas(){
+  const imgs=prepararGraficasParaImprimir();
+  const listo=imgs.map(i=>typeof i.decode==='function'?i.decode().catch(()=>{}):null);
+  Promise.all(listo).then(()=>window.print(),()=>window.print());
+}
+window.addEventListener('beforeprint',prepararGraficasParaImprimir);
+window.addEventListener('afterprint',restaurarGraficasDespuesDeImprimir);
 const C_NAVY='#003566', C_GOLD='#FFC300', C_RED='#d64545', C_GREEN='#1a9a5b';
 
 /* ======================================================================
@@ -372,8 +424,8 @@ function calcPeriodo(){
 const inP = f => { f=String(f||'').slice(0,10); return f>=PER.desde && f<=PER.hasta; };
 ['selPeriodo','fDesde','fHasta'].forEach(id=>$(id).onchange=()=>renderAll());
 $('rmMes').onchange=()=>{ try{ rReporteMensual(); }catch(e){ $('rmCuerpo').innerHTML='<div class="warnbar">No se pudo armar el reporte mensual: '+esc(e.message)+'</div>'; } };
-$('rmImprimir').onclick=()=>{ const quitar=()=>document.body.classList.remove('imp-reporte'); document.body.classList.add('imp-reporte'); window.addEventListener('afterprint',quitar,{once:true}); window.print(); };
-$('chkSocios').onchange=()=>{ try{ localStorage.setItem('dash_incluir_socios',$('chkSocios').checked?'1':'0'); }catch(e){} renderAll(); };
+$('rmImprimir').onclick=()=>{ const quitar=()=>document.body.classList.remove('imp-reporte'); document.body.classList.add('imp-reporte'); window.addEventListener('afterprint',quitar,{once:true}); imprimirConGraficas(); };
+$('chkSocios').onchange=()=>{ INCLUIR_SOCIOS=$('chkSocios').checked; renderAll(); };
 
 /* ======================================================================
    CÁLCULOS
