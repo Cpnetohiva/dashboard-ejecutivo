@@ -209,12 +209,30 @@ const COLS = {
 };
 const UNIDAD_PZ = /^(CAJA|TAMBO)/i;           // productos que se venden por pieza
 const SUFIJO_USUARIO = '@everplastic.local';
-// Interruptor de acceso: en false el tablero queda en revisión y solo entran los correos de CORREOS_PERMITIDOS (en minúsculas).
-// A cualquier otro usuario (o al modo demo) se le cierra la sesión y no se lee ninguna colección. En true entra cualquier usuario, como antes.
+// Interruptor de acceso. El correo de CORREOS_PERMITIDOS (admin, en minúsculas) entra siempre, sin consultar nada. Cualquier otro usuario (y el modo demo)
+// entra solo si DASHBOARD_PUBLICO es true (apertura forzada por archivo; se conserva en false) o si el documento config/dashboard_ejecutivo de Firestore
+// tiene abierto === true (interruptor de EVE Control → Admin → Config). Sin documento, con error o con cualquier otro valor: cerrado. A un usuario no
+// permitido se le cierra la sesión y no se lee ninguna colección de datos (solo ese documento).
 const DASHBOARD_PUBLICO = false;
 const CORREOS_PERMITIDOS = ['admin@everplastic.local'];
 const MSG_EN_REVISION = '🛠 En mantenimiento. Estamos validando las cifras del dashboard. Lo habilitaremos en cuanto sean confiables.';
-const correoPermitido = email => DASHBOARD_PUBLICO || CORREOS_PERMITIDOS.some(c => String(c).toLowerCase() === String(email||'').trim().toLowerCase());
+const esCorreoAdmin = email => CORREOS_PERMITIDOS.some(c => String(c).toLowerCase() === String(email||'').trim().toLowerCase());
+const correoPermitido = email => DASHBOARD_PUBLICO || esCorreoAdmin(email);
+// Lee ÚNICAMENTE config/dashboard_ejecutivo con el usuario autenticado. true solo si el documento existe y abierto es exactamente true;
+// ante cualquier error, documento inexistente o valor distinto devuelve false (cerrado por defecto) y deja el error en consola.
+async function leerEstadoSocios(){
+  try{
+    const d=await (db||firebase.firestore()).collection('config').doc('dashboard_ejecutivo').get();
+    const datos=d&&d.exists?d.data():null;
+    return !!datos&&datos.abierto===true;
+  }catch(e){ console.error('No se pudo leer config/dashboard_ejecutivo (se asume cerrado):',e); return false; }
+}
+// ¿Puede entrar este usuario? Admin: siempre (sin leer el documento). Otro: DASHBOARD_PUBLICO o interruptor abierto. Demo: mismo criterio (sin ser admin).
+async function accesoPermitido(email,demo){
+  if(!demo&&esCorreoAdmin(email)) return true;
+  if(DASHBOARD_PUBLICO) return true;
+  return await leerEstadoSocios();
+}
 // Interruptor del inventario: en false se oculta la pestaña, su panel y toda cifra de inventario del tablero. El código y calc() se conservan.
 const MOSTRAR_INVENTARIO = false;
 // Interruptor del punto de equilibrio: en false se oculta la pestaña, su panel y la tarjeta. peCalc, peParams, rPE y R.cfAuto/R.mcAuto se conservan.
@@ -368,7 +386,7 @@ $('btnDemo').onclick = async ()=>{ DEMO=true; await arrancar(); };
 $('btnSalir').onclick = ()=>{ if(auth) auth.signOut(); location.reload(); };
 $('btnRef').onclick = ()=>cargarYRender();
 
-// Bloqueo de acceso (DASHBOARD_PUBLICO = false): cierra la sesión, oculta la app y muestra el aviso en la pantalla de acceso. No lee Firestore.
+// Bloqueo de acceso (usuario no admin con el interruptor cerrado): cierra la sesión, oculta la app y muestra el aviso en la pantalla de acceso. No lee Firestore.
 async function bloquearAcceso(){
   try{ if(auth) await auth.signOut(); }catch(e){}
   DB=null;
@@ -376,28 +394,30 @@ async function bloquearAcceso(){
   $('login').style.display='';
   $('loginErr').textContent=MSG_EN_REVISION;
 }
-// Sesión que el navegador ya trae guardada al cargar la página: si no está permitida se cierra de inmediato (sin leer colecciones).
+// Sesión que el navegador ya trae guardada al cargar la página: si no es admin lee el interruptor y, si está cerrado, se cierra de inmediato (sin leer colecciones).
 function revisarSesionGuardada(){
   if(DASHBOARD_PUBLICO) return;
   try{
     const cfg=getCfg(); if(!cfg) return;
     if(!firebase.apps.length) firebase.initializeApp(cfg);
     auth=firebase.auth();
-    const dejar=auth.onAuthStateChanged(u=>{ dejar(); if(u && !correoPermitido(u.email)) bloquearAcceso(); });
+    const dejar=auth.onAuthStateChanged(async u=>{ dejar(); if(u && !(await accesoPermitido(u.email,false))) bloquearAcceso(); });
   }catch(e){}
 }
 
 async function arrancar(){
-  if(!DASHBOARD_PUBLICO && (DEMO || !correoPermitido(auth && auth.currentUser && auth.currentUser.email))){ await bloquearAcceso(); return; }
+  if(!(await accesoPermitido(auth && auth.currentUser && auth.currentUser.email,DEMO))){ await bloquearAcceso(); return; }
   $('login').style.display='none'; $('app').style.display='block';
   $('subTitle').textContent = DEMO?'MODO DEMO · datos ficticios':'Conectado · '+(auth&&auth.currentUser?auth.currentUser.email:'');
-  await cargarYRender();
+  await cargarYRender(true); // el acceso ya se comprobó arriba: no se vuelve a leer el documento
 }
 
 /* ======================================================================
    CARGA DE DATOS
    ====================================================================== */
-async function cargarYRender(){
+async function cargarYRender(accesoYaComprobado){
+  // Actualizar vuelve a comprobar el interruptor: si un socio ya está dentro y se cerró, se le cierra la sesión y no se lee ninguna colección.
+  if(!accesoYaComprobado && !(await accesoPermitido(auth && auth.currentUser && auth.currentUser.email,DEMO))){ await bloquearAcceso(); return; }
   $('warns').innerHTML='<div class="warnbar">Cargando datos…</div>';
   if(DEMO){ DB=demoData(); COL_FALLAS=['proveedores','clientes']; $('warns').innerHTML=''; }
   else{
